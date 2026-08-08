@@ -3,6 +3,7 @@ import { RequestValidationError, scrape } from "@trawl/tiers"
 import type { FlareSolverrRequest, FlareSolverrResponse } from "@trawl/types"
 import { Elysia } from "elysia"
 import { buildScrapeRequestFromFlareSolverr, flareSolverrError } from "../adapters/flaresolverr"
+import { userCookiesForHost } from "../config"
 import { getDeps, getPool } from "../deps"
 import { normalizeRequestCookies, requestUrl, validateFlareSolverrRequest } from "../validation"
 
@@ -32,6 +33,21 @@ export function v1Route() {
         host = new URL(req.url).hostname
       } catch {}
       req.cookies = normalizeRequestCookies(req.cookies, host)
+
+      // Merge per-domain user cookies (from USER_COOKIES_JSON, e.g. rutracker bb_session)
+      // so the caller doesn't need to pass them in every request. Request-supplied
+      // cookies take precedence (they override user cookies with the same name).
+      const userCookies = host ? userCookiesForHost(host) : undefined
+      if (userCookies && userCookies.length > 0) {
+        const existingNames = new Set((req.cookies ?? []).map((c) => c.name))
+        const merged = [...(req.cookies ?? [])]
+        for (const uc of userCookies) {
+          if (!existingNames.has(uc.name)) {
+            merged.push({ name: uc.name, value: uc.value, domain: uc.domain ?? (host ? `.${host}` : ""), path: uc.path ?? "/", expires: -1, httpOnly: false, secure: false })
+          }
+        }
+        req.cookies = merged
+      }
 
       const scrapeRequest = buildScrapeRequestFromFlareSolverr(req)
       const result = await scrape(scrapeRequest, getDeps())
