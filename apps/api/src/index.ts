@@ -1,5 +1,6 @@
 import { Elysia } from "elysia"
 import {
+  CP1251_HOSTS,
   MITM_PROXY_CA_DIR,
   MITM_PROXY_DEBUG,
   MITM_PROXY_ENABLED,
@@ -42,6 +43,7 @@ initPool()
         deps: getDeps(),
         maxTier: MITM_PROXY_MAX_TIER,
         debug: MITM_PROXY_DEBUG,
+        cp1251Hosts: CP1251_HOSTS,
       })
     }
   })

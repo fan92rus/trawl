@@ -4,7 +4,7 @@ import type { FlareSolverrRequest, FlareSolverrResponse } from "@trawl/types"
 import { Elysia } from "elysia"
 import { buildScrapeRequestFromFlareSolverr, flareSolverrError } from "../adapters/flaresolverr"
 import { getDeps, getPool } from "../deps"
-import { requestUrl, validateFlareSolverrRequest } from "../validation"
+import { normalizeRequestCookies, requestUrl, validateFlareSolverrRequest } from "../validation"
 
 // FlareSolverr v2 compat — always open (the v2 spec has no auth header)
 export function v1Route() {
@@ -25,6 +25,13 @@ export function v1Route() {
         set.status = 503
         return flareSolverrError(req.url, "Browser pool initializing, retry in a few seconds")
       }
+
+      // Normalize the optional cookies array (domain defaults to the request host).
+      let host: string | undefined
+      try {
+        host = new URL(req.url).hostname
+      } catch {}
+      req.cookies = normalizeRequestCookies(req.cookies, host)
 
       const scrapeRequest = buildScrapeRequestFromFlareSolverr(req)
       const result = await scrape(scrapeRequest, getDeps())

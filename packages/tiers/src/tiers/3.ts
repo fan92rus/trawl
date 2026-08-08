@@ -4,7 +4,7 @@ import type { Cookie, TierResult } from "@trawl/types"
 import { solvePageCaptchas } from "../solvers"
 import { waitForAkamaiResolution } from "../utils/akamaiWait"
 import { waitForChallengeResolution } from "../utils/challengeWait"
-import { toCookies } from "../utils/cookies"
+import { normalizeSameSite, toCookies } from "../utils/cookies"
 import {
   detectChallengeType,
   hasAkamaiChallenge,
@@ -40,6 +40,7 @@ export async function runTier3(
   extraHeaders?: Record<string, string>,
   method?: string,
   body?: string,
+  requestCookies?: Cookie[],
 ): Promise<Tier3Result> {
   const start = Date.now()
 
@@ -52,6 +53,24 @@ export async function runTier3(
   const page = await freshCtx.newPage()
 
   try {
+    // Inject auth/session cookies (e.g. rutracker bb_session) BEFORE navigation so the
+    // Cloudflare challenge is solved while already logged in — otherwise the solved
+    // session would be a guest and search pages would return no results.
+    if (requestCookies && requestCookies.length > 0) {
+      await freshCtx.addCookies(
+        requestCookies.map((c) => ({
+          name: c.name,
+          value: c.value,
+          domain: c.domain,
+          path: c.path,
+          expires: c.expires,
+          httpOnly: c.httpOnly,
+          secure: c.secure,
+          sameSite: normalizeSameSite(c.sameSite),
+        })),
+      )
+    }
+
     if ((extraHeaders && Object.keys(extraHeaders).length > 0) || method === "POST") {
       await page.route(url, (route: RouteLike) => {
         route.continue(routeContinueOverrides(route, extraHeaders, method, body))

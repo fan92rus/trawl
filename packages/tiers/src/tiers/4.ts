@@ -4,7 +4,7 @@ import type { Cookie, TierResult } from "@trawl/types"
 import { solvePageCaptchas } from "../solvers"
 import { waitForAkamaiResolution } from "../utils/akamaiWait"
 import { waitForChallengeResolution } from "../utils/challengeWait"
-import { toCookies } from "../utils/cookies"
+import { normalizeSameSite, toCookies } from "../utils/cookies"
 import {
   detectChallengeType,
   hasAkamaiChallenge,
@@ -40,6 +40,7 @@ export async function runTier4(
   extraHeaders?: Record<string, string>,
   method?: string,
   body?: string,
+  requestCookies?: Cookie[],
 ): Promise<Tier4Result> {
   const start = Date.now()
 
@@ -54,6 +55,22 @@ export async function runTier4(
     state.proxyContext = proxyContext
 
     const page = await proxyContext.newPage()
+
+    // Inject auth/session cookies before navigation (same rationale as Tier 3).
+    if (requestCookies && requestCookies.length > 0) {
+      await proxyContext.addCookies(
+        requestCookies.map((c) => ({
+          name: c.name,
+          value: c.value,
+          domain: c.domain,
+          path: c.path,
+          expires: c.expires,
+          httpOnly: c.httpOnly,
+          secure: c.secure,
+          sameSite: normalizeSameSite(c.sameSite),
+        })),
+      )
+    }
 
     if ((extraHeaders && Object.keys(extraHeaders).length > 0) || method === "POST") {
       await page.route(url, (route: RouteLike) => {

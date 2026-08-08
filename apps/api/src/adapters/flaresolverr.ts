@@ -12,6 +12,7 @@ export function buildScrapeRequestFromFlareSolverr(req: FlareSolverrRequest): Sc
     headers,
     method,
     body: req.postData,
+    cookies: req.cookies,
     // Prowlarr's Cardigann flow serializes proxy as {url, username, password};
     // other callers may send a plain URL string. Normalize to a single URL string
     // here so downstream Playwright/Camoufox `newContext({proxy})` calls receive
