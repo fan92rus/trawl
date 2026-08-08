@@ -32,7 +32,17 @@ export function responseFromScrapeResult(
   cp1251Hosts?: ReadonlySet<string>,
 ): ProxyBufferedResponse {
   const contentType = result.contentType ?? result.responseHeaders?.["content-type"] ?? "text/html; charset=utf-8"
-  const useRenderedHtml = isHtml(contentType) && result.html.length > 0
+
+  // Decide whether to use the browser-rendered DOM (result.html) or the raw HTTP
+  // response body (result.body). The rendered DOM is normally richer (JS-executed),
+  // but right after a Cloudflare challenge solve on a cold browser context the DOM
+  // can still be empty/incomplete (e.g. 1.6 KB) even though the server sent the
+  // full 250 KB page. In that case the raw body is far more complete and reliable.
+  const bodyBytes = result.body ?? null
+  const bodyLen = bodyBytes ? bodyBytes.byteLength : 0
+  const htmlLen = result.html.length
+  const renderedLooksIncomplete = bodyLen > 0 && htmlLen > 0 && htmlLen < bodyLen * 0.2 && htmlLen < 10_000
+  const useRenderedHtml = isHtml(contentType) && htmlLen > 0 && !renderedLooksIncomplete
 
   let body: Buffer
   let bodyIsCp1251 = false
@@ -46,18 +56,28 @@ export function responseFromScrapeResult(
     } else {
       body = Buffer.from(result.html, "utf8")
     }
+  } else if (bodyBytes) {
+    // Use the raw HTTP response body as-is. It is already in the server's native
+    // encoding (e.g. windows-1251 for rutracker.org), so NO re-encoding is needed —
+    // but we must report the correct charset so the client decodes it properly.
+    body = Buffer.from(bodyBytes)
   } else {
-    body = result.body ? Buffer.from(result.body) : Buffer.from(result.html, "utf8")
+    body = Buffer.from(result.html, "utf8")
   }
 
   const headers: Record<string, string> = {}
   for (const [name, value] of Object.entries(result.responseHeaders ?? {})) {
     const lower = name.toLowerCase()
+    // When we replace the response body with a re-rendered DOM, the original
+    // transport-level headers (content-encoding, content-length, etag, …) no
+    // longer describe what we actually send, so strip them. In all other paths
+    // (raw HTTP body or utf-8 fallback) the original headers stay valid.
     if (useRenderedHtml && TRANSFORMED_BODY_HEADERS.has(lower)) continue
     headers[lower] = value
   }
-  // Reflect the actual body encoding in the Content-Type header.
-  headers["content-type"] = bodyIsCp1251 ? contentType.replace(/charset=[^;\s]+/i, "charset=windows-1251") : contentType
+  headers["content-type"] = bodyIsCp1251
+    ? contentType.replace(/charset=[^;\s]+/i, "charset=windows-1251")
+    : contentType
 
   return { body, contentType: headers["content-type"], headers }
 }

@@ -55,4 +55,23 @@ describe("responseFromScrapeResult", () => {
     expect([...response.body]).toEqual([...bytes])
     expect(response.headers["content-range"]).toBe("bytes 0-4/100")
   })
+
+  test("falls back to raw HTTP body when rendered DOM is incomplete after CF solve", () => {
+    // Simulates a cold-start Cloudflare solve: page.content() returned a tiny
+    // 1.6 KB shell while the server actually sent a 250 KB page.
+    const fullPage = "<html><body>".repeat(500) + "<td class=\"tor-size\">result</td>" + "</body></html>".repeat(500)
+    const response = responseFromScrapeResult(
+      result({
+        html: "<html><body>loading</body></html>", // 1.6 KB-ish incomplete DOM
+        body: Buffer.from(fullPage, "utf8"), // ~250 KB real response
+        contentType: "text/html; charset=utf-8",
+        responseHeaders: { "content-type": "text/html; charset=utf-8" },
+      }),
+    )
+
+    // The full raw body must be served, not the incomplete rendered DOM.
+    expect(response.body.length).toBeGreaterThan(10_000)
+    expect(response.body.toString()).toContain("result")
+    expect(response.body.toString()).not.toContain("loading")
+  })
 })
