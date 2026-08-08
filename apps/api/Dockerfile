@@ -58,7 +58,7 @@ RUN --mount=type=secret,id=GITHUB_TOKEN,env=GITHUB_TOKEN \
       arm64) RELEASE="alpha.25"; ZIP="camoufox-150.0.2-${RELEASE}-lin.arm64.zip" ;; \
       *) echo "unsupported arch: $TARGETARCH"; exit 1 ;; \
     esac && \
-    curl -fsSL \
+    curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30 \
       "https://github.com/daijro/camoufox/releases/download/v150.0.2-beta.25/${ZIP}" \
       -o /tmp/camoufox.zip && \
     unzip -q /tmp/camoufox.zip -d /opt/camoufox && \
@@ -76,7 +76,7 @@ RUN --mount=type=secret,id=GITHUB_TOKEN,env=GITHUB_TOKEN \
 # Baking a verified copy into the image makes startup deterministic and removes the
 # runtime GitHub dependency + first-launch download latency. The size check fails the
 # build if the download is truncated, so a corrupt file can never be baked in.
-RUN curl -fsSL \
+RUN curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30 \
       "https://github.com/P3TERX/GeoLite.mmdb/releases/latest/download/GeoLite2-City.mmdb" \
       -o /opt/camoufox/GeoLite2-City.mmdb && \
     [ "$(stat -c%s /opt/camoufox/GeoLite2-City.mmdb)" -gt 10000000 ] || \
