@@ -56,4 +56,66 @@ export const MITM_PROXY_MAX_TIER = isTier(configuredMaxTier) ? configuredMaxTier
 // default — proxied clients can be chatty. Errors are always logged.
 export const MITM_PROXY_DEBUG = /^(1|true|yes)$/i.test(process.env.MITM_PROXY_DEBUG ?? "")
 
+// ── Auth cookies injection (per-domain) ─────────────────────────────────────────
+// Optional JSON file mapping a hostname to an array of {name, value, domain?, path?}
+// cookies that are injected into the browser context before every request to that
+// domain. Needed for sites requiring login (e.g. rutracker.org bb_session) where
+// the caller (Prowlarr) has no cookies of its own to forward. Mirrors the
+// flaresolver-proxy user_cookies.json design.
+export interface UserCookie {
+  name: string
+  value: string
+  domain?: string
+  path?: string
+}
+
+function loadUserCookies(): Record<string, UserCookie[]> {
+  const path = process.env.USER_COOKIES_JSON
+  if (!path) return {}
+  try {
+    // Synchronous read at startup (config is loaded once) — fine for a small file.
+    let text = ""
+    try {
+      text = require("node:fs").readFileSync(path, "utf8")
+    } catch {
+      text = ""
+    }
+    if (!text.trim()) return {}
+    const parsed: unknown = JSON.parse(text)
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      console.warn("[config] USER_COOKIES_JSON: root must be an object {hostname: [cookies]}")
+      return {}
+    }
+    const out: Record<string, UserCookie[]> = {}
+    for (const [host, arr] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!Array.isArray(arr)) continue
+      out[host.toLowerCase()] = (arr as unknown[]).filter(
+        (c): c is UserCookie => typeof c === "object" && c !== null && typeof (c as UserCookie).name === "string",
+      )
+    }
+    console.log(`[config] user cookies loaded for domains: ${Object.keys(out).join(", ") || "(none)"}`)
+    return out
+  } catch (err) {
+    console.warn("[config] USER_COOKIES_JSON load failed:", err instanceof Error ? err.message : err)
+    return {}
+  }
+}
+
+export const userCookiesByDomain: Record<string, UserCookie[]> = loadUserCookies()
+
+export function userCookiesForHost(host: string): UserCookie[] | undefined {
+  const key = host.toLowerCase()
+  return userCookiesByDomain[key] ?? userCookiesByDomain[key.replace(/^\./, "")]
+}
+
+// Domains whose HTML responses are re-encoded from UTF-8 to windows-1251 before being
+// returned. Prowlarr's RuTracker indexer decodes responses as windows-1251, so serving
+// UTF-8 bytes would produce mojibake. Comma-separated hostnames, e.g. CP1251_HOSTS=rutracker.org
+const CP1251_HOSTS_ENV = process.env.CP1251_HOSTS ?? ""
+export const CP1251_HOSTS: ReadonlySet<string> = new Set(
+  CP1251_HOSTS_ENV.split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean),
+)
+
 export const startTime = Date.now()

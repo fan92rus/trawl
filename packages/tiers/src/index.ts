@@ -5,6 +5,7 @@ export { runTier1, type Tier1Result } from "./tiers/1"
 export { runTier2, type Tier2Result } from "./tiers/2"
 export { runTier3, type Tier3Result } from "./tiers/3"
 export { runTier4, type Tier4Result } from "./tiers/4"
+export { decodeCp1251, encodeCp1251 } from "./utils/cp1251"
 export {
   type ChallengeType,
   detectChallengeType,

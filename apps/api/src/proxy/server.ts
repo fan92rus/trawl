@@ -7,6 +7,7 @@ import {
   RESPONSE_HOP_BY_HOP_HEADERS,
   scrape,
 } from "@trawl/tiers"
+import { userCookiesForHost } from "../config"
 import { MitmCa } from "./ca"
 import { ChallengeCache } from "./challengeCache"
 import { directForwardHttp, directForwardHttps, type ForwardResult } from "./directForward"
@@ -27,6 +28,8 @@ export interface MitmProxyOptions {
   maxTier?: 1 | 2 | 3 | 4
   maxTimeout?: number
   debug?: boolean
+  // Domains whose rendered HTML is re-encoded to windows-1251 (see responsePolicy).
+  cp1251Hosts?: ReadonlySet<string>
 }
 
 export interface MitmProxyHandle {
@@ -405,6 +408,17 @@ async function serveViaScrape(
         body: body?.toString("utf8"),
         maxTier: opts.maxTier,
         maxTimeout: opts.maxTimeout,
+        // Inject configured per-domain auth cookies (e.g. rutracker bb_session) so
+        // the Cloudflare challenge is solved while logged in.
+        cookies: userCookiesForHost(new URL(url).hostname)?.map((c) => ({
+          name: c.name,
+          value: c.value,
+          domain: c.domain ?? "." + new URL(url).hostname,
+          path: c.path ?? "/",
+          expires: -1,
+          httpOnly: false,
+          secure: false,
+        })),
       },
       opts.deps,
     )
@@ -422,7 +436,7 @@ async function serveViaScrape(
     // Browser tiers expose both the original navigation response and the
     // rendered DOM. For HTML, the latter is the solved page behind the challenge.
     // Binary responses retain their exact raw bytes.
-    const response = responseFromScrapeResult(scrapeResult)
+    const response = responseFromScrapeResult(scrapeResult, opts.cp1251Hosts)
     if (opts.debug) {
       console.log(
         `[proxy] writeResponseFromBuffer status=${scrapeResult.statusCode || 200} payload=${response.body.length}b contentType=${response.contentType}`,

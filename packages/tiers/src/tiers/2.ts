@@ -27,6 +27,7 @@ export async function runTier2(
   extraHeaders?: Record<string, string>,
   method?: string,
   body?: string,
+  requestCookies?: Cookie[],
 ): Promise<Tier2Result> {
   const start = Date.now()
   const activeContext = handle.context
@@ -38,8 +39,11 @@ export async function runTier2(
     // addCookies replaces cookies by name+domain+path, so no need to clearCookies first.
     // Keeping the context's CF cookies (cf_clearance, __cf_bm) intact means CF sees a
     // browser with history, which speeds up challenge evaluation on the next Tier 3 run.
+    // Request cookies (auth/session, e.g. rutracker bb_session) come first so they take
+    // precedence over any stale cached values with the same name+domain+path.
+    const merged = [...(requestCookies ?? []), ...session.cookies]
     await activeContext.addCookies(
-      session.cookies.map((c) => ({
+      merged.map((c) => ({
         name: c.name,
         value: c.value,
         domain: c.domain,

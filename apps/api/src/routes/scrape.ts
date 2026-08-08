@@ -4,7 +4,7 @@ import type { ScrapeRequest } from "@trawl/types"
 import { Elysia } from "elysia"
 import { flareSolverrError } from "../adapters/flaresolverr"
 import { getDeps, getPool } from "../deps"
-import { requestUrl, validateScrapeRequest } from "../validation"
+import { normalizeRequestCookies, requestUrl, validateScrapeRequest } from "../validation"
 
 // Native TRAWL API — richer response (tier, timings, sessionCached).
 // Error mapping:
@@ -20,6 +20,12 @@ export function scrapeRoute() {
         set.status = 503
         return { error: "Browser pool initializing, retry in a few seconds" }
       }
+      // Normalize the optional cookies array (domain defaults to the request host).
+      let host: string | undefined
+      try {
+        host = new URL(req.url).hostname
+      } catch {}
+      req.cookies = normalizeRequestCookies(req.cookies, host)
       return await scrape({ ...req, headers: sanitizeHeaders(req.headers) }, getDeps())
     } catch (err) {
       if (err instanceof RequestValidationError) {

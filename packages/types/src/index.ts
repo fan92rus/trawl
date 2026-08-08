@@ -27,6 +27,11 @@ export interface ScrapeRequest {
   body?: string
   // Per-request proxy override — bypasses the server-configured proxy pool for this call.
   proxy?: string
+  // Optional auth/session cookies injected into the browser context BEFORE navigation.
+  // Needed for sites that require login (e.g. rutracker.org) — the cookies are sent to
+  // Tier 2 (cached session) and Tier 3 (fresh solve) so the Cloudflare challenge is
+  // solved while already authenticated. Merged with any cached session cookies.
+  cookies?: Cookie[]
 }
 
 export interface TierResult {
@@ -133,6 +138,9 @@ export interface FlareSolverrRequest {
   // TRAWL extension (not part of the FlareSolverr v2 contract) — per-request proxy override.
   // Accepts Prowlarr's {url, username, password} object shape OR a plain URL string.
   proxy?: ProxyEndpointInput
+  // Optional auth cookies injected into the browser before navigation (FlareSolverr v2
+  // supports the same `cookies` field on request.get/request.post).
+  cookies?: Cookie[]
 }
 
 export interface FlareSolverrResponse {

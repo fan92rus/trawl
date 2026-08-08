@@ -112,7 +112,16 @@ export async function scrape(req: ScrapeRequest, deps: OrchestratorDeps): Promis
     const session = await deps.loadSession(domain)
     if (session && maxTier >= 2) {
       const remaining = maxTimeout - (Date.now() - totalStart)
-      const t2 = await runTier2(req.url, handle, session, remaining, sanitizedHeaders, req.method, req.body)
+      const t2 = await runTier2(
+        req.url,
+        handle,
+        session,
+        remaining,
+        sanitizedHeaders,
+        req.method,
+        req.body,
+        req.cookies,
+      )
       emit(t2)
       if (hasUsablePayload(t2)) {
         if (t2.cookies && t2.cookies.length > 0) {
@@ -156,7 +165,7 @@ export async function scrape(req: ScrapeRequest, deps: OrchestratorDeps): Promis
     let t3: Awaited<ReturnType<typeof runTier3>>
     for (let attempt = 0; ; attempt++) {
       const remaining3 = maxTimeout - (Date.now() - totalStart)
-      t3 = await runTier3(req.url, handle, remaining3, proxy3, sanitizedHeaders, req.method, req.body)
+      t3 = await runTier3(req.url, handle, remaining3, proxy3, sanitizedHeaders, req.method, req.body, req.cookies)
 
       // Only flag the pool for a recycle when the upstream actively rejected the
       // browser's profile ("blocked"/"needs-js"). Successful solves preserve cookies,
@@ -223,7 +232,7 @@ export async function scrape(req: ScrapeRequest, deps: OrchestratorDeps): Promis
     for (let attempt = 0; ; attempt++) {
       console.log(`[orchestrator] Tier 4 via residential proxy: ${proxy4.replace(/\/\/[^@]*@/, "//**@")}`)
       const remaining4 = maxTimeout - (Date.now() - totalStart)
-      t4 = await runTier4Lazy(req.url, handle, remaining4, proxy4, sanitizedHeaders, req.method, req.body)
+      t4 = await runTier4Lazy(req.url, handle, remaining4, proxy4, sanitizedHeaders, req.method, req.body, req.cookies)
 
       // Mirror Tier 3's recycle-on-suspect policy — only flag when the upstream
       // explicitly rejected the browser's profile.
