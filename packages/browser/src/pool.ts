@@ -244,6 +244,11 @@ export class BrowserPool {
         // Disabled Firefox services — not used in headless scraping
         "browser.safebrowsing.downloads.enabled": false,
         "browser.safebrowsing.malware.enabled": false,
+        // Force IPv4-only: the server has AAAA records for many CDNs (Cloudflare) but no
+        // IPv6 route, so Firefox's default IPv6 preference hangs on connect until the
+        // goto timeout fires. Disabling IPv6 DNS resolution makes Firefox fall back to
+        // A records immediately.
+        "network.dns.disableIPv6": true,
         "extensions.update.enabled": false,
         "extensions.systemAddon.update.url": "",
         "browser.fixup.alternate.enabled": false,
