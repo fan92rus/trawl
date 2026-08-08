@@ -1,5 +1,5 @@
 import { FINGERPRINT } from "@trawl/browser"
-import type { TierResult } from "@trawl/types"
+import type { Cookie, TierResult } from "@trawl/types"
 import {
   hasAkamaiChallenge,
   hasHcaptcha,
@@ -29,22 +29,35 @@ export async function runTier1(
   extraHeaders?: Record<string, string>,
   method?: string,
   body?: string,
+  requestCookies?: Cookie[],
 ): Promise<Tier1Result> {
   const start = Date.now()
   try {
     const m = (method ?? "GET").toUpperCase()
+
+    // Build Cookie header from request cookies (e.g. rutracker bb_session).
+    // Tier 1 is a plain HTTP fetch — without auth cookies, sites that serve a
+    // 200 guest page look "successful" and Tier 3 (browser) never runs.
+    let cookieHeader = ""
+    if (requestCookies && requestCookies.length > 0) {
+      cookieHeader = requestCookies.map((c) => `${c.name}=${c.value}`).join("; ")
+    }
+
+    const headers: Record<string, string> = {
+      "User-Agent": FINGERPRINT.userAgent,
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Accept-Encoding": "gzip, deflate, br",
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+      ...extraHeaders,
+    }
+    if (cookieHeader) headers.Cookie = cookieHeader
+
     const res = await fetch(url, {
       method: m,
       body: METHODS_WITH_BODY.has(m) ? body : undefined,
-      headers: {
-        "User-Agent": FINGERPRINT.userAgent,
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Cache-Control": "no-cache",
-        Pragma: "no-cache",
-        ...extraHeaders,
-      },
+      headers,
       redirect: "follow",
     })
 

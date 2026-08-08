@@ -74,7 +74,7 @@ export async function scrape(req: ScrapeRequest, deps: OrchestratorDeps): Promis
 
   // Tier 1: plain HTTP fetch
   if (!req.skipHttp && maxTier >= 1) {
-    const t1 = await runTier1(req.url, sanitizedHeaders, req.method, req.body)
+    const t1 = await runTier1(req.url, sanitizedHeaders, req.method, req.body, req.cookies)
     emit(t1)
     if (hasUsablePayload(t1)) {
       // Tier 1 doesn't acquire a browser (it's a plain HTTP fetch). Use a random fingerprint
