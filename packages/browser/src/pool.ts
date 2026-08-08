@@ -201,6 +201,13 @@ export class BrowserPool {
       screen: { minWidth: 1280, maxWidth: 2560, minHeight: 720, maxHeight: 1440 },
       window: [1920, 1080] as [number, number],
       geoip: true,
+      // uBlock Origin (camoufox-js default addon) needs to be downloaded from
+      // addons.mozilla.org on every browser launch and unpacked to a temp dir; in a
+      // container with a flaky path to Mozilla that download intermittently fails and
+      // crashes pool init with InvalidAddonPath. UBO is an ad blocker, not a
+      // Cloudflare-bypass tool, so excluding it keeps CF solving intact while making
+      // startup deterministic.
+      exclude_addons: ["UBO"],
       humanize: true,
       disable_coop: true,
       block_webrtc: true,
