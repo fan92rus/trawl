@@ -29,6 +29,7 @@ jobs:
 
       - name: Install Bun
         run: |
+          apt-get update && apt-get install -y unzip >/dev/null
           curl -fsSL https://bun.sh/install | bash
           export PATH="$HOME/.bun/bin:$PATH"
           bun --version
