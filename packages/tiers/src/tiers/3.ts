@@ -84,7 +84,11 @@ export async function runTier3(
         const resUrl = res.url()
         if (resUrl === url || resUrl.startsWith(url.replace(/\/$/, ""))) {
           statusCode = res.status()
-          if (!mainResponseHolder.value) mainResponseHolder.value = res
+          // Keep the LATEST matching response — after a CF challenge solve the
+          // browser re-navigates to the original URL and gets the real response
+          // (e.g. a 302 with Location header). Capturing only the first response
+          // loses redirect headers/body, breaking MITM proxy clients (Prowlarr).
+          mainResponseHolder.value = res
         }
       } catch {}
     })
