@@ -11,12 +11,6 @@ env:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    container:
-      image: gitea.local/fan92rus/ci-runner:latest
-      credentials:
-        username: fan92rus
-        password: ${{ secrets.PACKAGES_TOKEN }}
-      options: --add-host gitea.local:192.168.1.96
     steps:
       - name: Checkout repository
         env:
