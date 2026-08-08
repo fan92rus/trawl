@@ -1,0 +1,55 @@
+name: Publish Docker image
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+env:
+  NOLOGO: 1
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    container:
+      image: gitea.local/fan92rus/ci-runner:latest
+      credentials:
+        username: fan92rus
+        password: ${{ secrets.PACKAGES_TOKEN }}
+      options: --add-host gitea.local:192.168.1.96
+    steps:
+      - name: Checkout repository
+        env:
+          GITEA_TOKEN: ${{ github.token }}
+        run: |
+          git config --global http.https://gitea.local.curloptResolve "gitea.local:443:192.168.1.96"
+          git clone --depth=1 "https://gitea:$GITEA_TOKEN@gitea.local/fan92rus/Trawl.git" .
+          git config --global --add safe.directory "$(pwd)"
+
+      - name: Get version
+        id: semver
+        run: |
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "version=${TAG}-$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Build Docker image
+        run: |
+          docker build -f apps/api/Dockerfile \
+            -t trawl:${{ steps.semver.outputs.version }} \
+            -t trawl:latest .
+
+      - name: Push to Gitea Container Registry
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.semver.outputs.version }}"
+          REGISTRY="gitea.local"
+          REPO=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')
+
+          # DNS fallback for host runner
+          (echo '192.168.1.96 gitea.local' >> /etc/hosts) 2>/dev/null || true
+
+          echo "${{ secrets.PACKAGES_TOKEN }}" | docker login "${REGISTRY}" -u fan92rus --password-stdin
+          docker tag trawl:latest "${REGISTRY}/${REPO}/trawl:${VERSION}"
+          docker tag trawl:latest "${REGISTRY}/${REPO}/trawl:latest"
+          docker push "${REGISTRY}/${REPO}/trawl:${VERSION}"
+          docker push "${REGISTRY}/${REPO}/trawl:latest"

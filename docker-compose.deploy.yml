@@ -1,0 +1,71 @@
+# TRAWL — FlareSolverr-compatible challenge-bypass service with auth-cookie injection
+# (rutracker.org bb_session) and cp1251 re-encode for the Prowlarr RuTracker parser.
+#
+# Deploy: CI publish job builds apps/api/Dockerfile and pushes gitea.local/fan92rus/trawl/trawl:latest.
+# Manual first deploy on the server (192.168.1.111):
+#   mkdir -p /root/trawl
+#   cp docker-compose.deploy.yml /root/trawl/
+#   cp user_cookies.json /root/trawl/  # real rutracker cookies, gitignored
+#   cd /root/trawl && docker compose -f docker-compose.deploy.yml up -d
+#
+# Wire-up: point Prowlarr at the MITM proxy as a plain HTTP proxy
+# (Settings → General → Proxy → http://trawl:8192), keep RuTracker indexer baseUrl
+# https://rutracker.org — TRAWL solves Cloudflare in-browser, so no JA3 re-fetch
+# problem and InfoUrl stays the real rutracker.org link. Install the proxy CA
+# (served at http://trawl:8191/proxy-ca.crt) into the Prowlarr container trust store.
+
+services:
+  redis:
+    image: redis:8.8-alpine
+    restart: unless-stopped
+    volumes:
+      - trawl-redis:/data
+
+  trawl:
+    image: gitea.local/fan92rus/trawl/trawl:latest
+    container_name: trawl
+    ports:
+      # API + FlareSolverr-compatible /v1
+      - "8191:8191"
+      # MITM forward proxy (TRAWL solves challenges in-browser; clients see real URLs)
+      - "8192:8192"
+    shm_size: 1gb
+    environment:
+      REDIS_URL: redis://redis:6379
+      BROWSER_POOL_SIZE: ${BROWSER_POOL_SIZE:-1}
+      BROWSER_CONTENT_PROCESSES: ${BROWSER_CONTENT_PROCESSES:-2}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-86400}
+      # MITM proxy: on. Prowlarr points its HTTP proxy here.
+      MITM_PROXY_ENABLED: "true"
+      MITM_PROXY_HOST: 0.0.0.0
+      MITM_PROXY_PORT: 8192
+      MITM_PROXY_CA_DIR: /data/proxy-ca
+      # Cap escalation: no residential tier on this server.
+      MITM_PROXY_MAX_TIER: 3
+      MITM_PROXY_DEBUG: ${MITM_PROXY_DEBUG:-false}
+      # Auth cookies for rutracker.org (bb_guid/bb_ssl/bb_session/bb_t), mounted below.
+      USER_COOKIES_JSON: /data/user_cookies.json
+      # Prowlarr's RuTracker parser decodes responses as windows-1251.
+      CP1251_HOSTS: rutracker.org
+    volumes:
+      # CA persists so clients don't re-install on restart.
+      - trawl-proxy-ca:/data/proxy-ca
+      - trawl-cookies:/data/cookies
+      # Real cookies file (gitignored) — copy next to this compose file on the server.
+      - ./user_cookies.json:/data/user_cookies.json:ro
+    depends_on:
+      - redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8191/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+volumes:
+  trawl-redis:
+  trawl-proxy-ca:
+  trawl-cookies:

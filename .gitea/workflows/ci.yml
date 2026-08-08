@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [dev, main, 'feat/**', 'fix/**']
+  pull_request:
+    branches: [dev, main]
+
+env:
+  NOLOGO: 1
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    container:
+      image: gitea.local/fan92rus/ci-runner:latest
+      credentials:
+        username: fan92rus
+        password: ${{ secrets.PACKAGES_TOKEN }}
+      options: --add-host gitea.local:192.168.1.96
+    steps:
+      - name: Checkout repository
+        env:
+          GITEA_TOKEN: ${{ github.token }}
+        run: |
+          git config --global http.https://gitea.local.curloptResolve "gitea.local:443:192.168.1.96"
+          git clone --depth=1 "https://gitea:$GITEA_TOKEN@gitea.local/fan92rus/Trawl.git" .
+          git config --global --add safe.directory "$(pwd)"
+
+      - name: Install Bun
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          export PATH="$HOME/.bun/bin:$PATH"
+          bun --version
+
+      - name: Install deps
+        run: |
+          export PATH="$HOME/.bun/bin:$PATH"
+          bun install --frozen-lockfile
+
+      - name: Biome (format + lint + organize-imports)
+        run: |
+          export PATH="$HOME/.bun/bin:$PATH"
+          bun run check
+
+      - name: TypeScript
+        run: |
+          export PATH="$HOME/.bun/bin:$PATH"
+          bun --cwd packages/types typecheck
+          bun --cwd packages/browser typecheck
+          bun --cwd packages/tiers typecheck
+          bun --cwd apps/api typecheck
+
+      - name: Unit tests
+        run: |
+          export PATH="$HOME/.bun/bin:$PATH"
+          bun test
