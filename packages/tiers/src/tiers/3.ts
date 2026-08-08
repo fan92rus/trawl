@@ -95,7 +95,7 @@ export async function runTier3(
     const gotoErr = await page
       .goto(url, {
         waitUntil: "domcontentloaded",
-        timeout: Math.min(maxTimeout, 30_000),
+        timeout: Math.min(maxTimeout, 90_000),
       })
       .catch((e: Error) => e)
 
