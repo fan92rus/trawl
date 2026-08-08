@@ -5,14 +5,26 @@
 # Manual first deploy on the server (192.168.1.111):
 #   mkdir -p /root/trawl
 #   cp docker-compose.deploy.yml /root/trawl/
-#   cp user_cookies.json /root/trawl/  # real rutracker cookies, gitignored
-#   cd /root/trawl && docker compose -f docker-compose.deploy.yml up -d
+#   cp user_cookies.json /root/trawl/      # real rutracker cookies, gitignored
+#   docker compose -f docker-compose.deploy.yml up -d
 #
-# Wire-up: point Prowlarr at the MITM proxy as a plain HTTP proxy
-# (Settings → General → Proxy → http://trawl:8192), keep RuTracker indexer baseUrl
-# https://rutracker.org — TRAWL solves Cloudflare in-browser, so no JA3 re-fetch
-# problem and InfoUrl stays the real rutracker.org link. Install the proxy CA
-# (served at http://trawl:8191/proxy-ca.crt) into the Prowlarr container trust store.
+# Wire-up:
+#   1. Prowlarr: Settings → General → Proxy → Host=trawl, Port=8192, Type=http.
+#   2. Keep the RuTracker indexer baseUrl at https://rutracker.org/ — TRAWL solves
+#      Cloudflare in-browser, so no JA3 re-fetch problem and InfoUrl stays the real
+#      rutracker.org link.
+#   3. Install the TRAWL MITM CA into the Prowlarr container trust store (see
+#      install-prowlarr-ca.sh, or run the one-liner in notes/trawl.md).
+#
+# Ports (host:container):
+#   8191 → API + FlareSolverr-compatible /v1  (mapped to 8193 on CT100 to avoid
+#          collision with the legacy flaresolverr container on 8191/8192)
+#   8192 → MITM forward proxy                 (mapped to 8194 on CT100)
+#
+# Networks:
+#   default        — trawl + redis internal traffic
+#   relampa_default — external; gives trawl DNS via dnsproxy (172.22.0.x) and lets
+#                    the prowlarr container reach it by name (trawl:8192).
 
 services:
   redis:
@@ -25,17 +37,18 @@ services:
     image: gitea.local/fan92rus/trawl/trawl:latest
     container_name: trawl
     ports:
-      # API + FlareSolverr-compatible /v1
-      - "8191:8191"
-      # MITM forward proxy (TRAWL solves challenges in-browser; clients see real URLs)
-      - "8192:8192"
+      # CT100 host ports 8193/8194 avoid collision with the legacy flaresolverr
+      # container (8191/8192). Inside Docker the service still listens on 8191/8192.
+      - "8193:8191"
+      - "8194:8192"
     shm_size: 1gb
+    dns: 172.22.0.2  # dnsproxy on relampa_default — DoH upstreams, IPv4 only
     environment:
       REDIS_URL: redis://redis:6379
       BROWSER_POOL_SIZE: ${BROWSER_POOL_SIZE:-1}
       BROWSER_CONTENT_PROCESSES: ${BROWSER_CONTENT_PROCESSES:-2}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-86400}
-      # MITM proxy: on. Prowlarr points its HTTP proxy here.
+      # MITM proxy: on. Prowlarr points its HTTP proxy here (trawl:8192).
       MITM_PROXY_ENABLED: "true"
       MITM_PROXY_HOST: 0.0.0.0
       MITM_PROXY_PORT: 8192
@@ -55,6 +68,9 @@ services:
       - ./user_cookies.json:/data/user_cookies.json:ro
     depends_on:
       - redis
+    networks:
+      - default
+      - relampa_default
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8191/health"]
@@ -64,6 +80,10 @@ services:
       start_period: 90s
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+
+networks:
+  relampa_default:
+    external: true
 
 volumes:
   trawl-redis:

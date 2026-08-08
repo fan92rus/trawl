@@ -1,0 +1,8 @@
+{
+  "rutracker.org": [
+    { "name": "bb_guid", "value": "YOUR_BB_GUID" },
+    { "name": "bb_ssl", "value": "1" },
+    { "name": "bb_session", "value": "0-YOUR_USER_ID-YOUR_SESSION_HASH" },
+    { "name": "bb_t", "value": "YOUR_BB_T" }
+  ]
+}

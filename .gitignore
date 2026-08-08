@@ -8,3 +8,6 @@ apps/docs/.vitepress/dist/
 *.tsbuildinfo
 dist/
 .turbo/
+
+# Real auth cookies — never commit. Copy user_cookies.example.json and fill in.
+user_cookies.json
