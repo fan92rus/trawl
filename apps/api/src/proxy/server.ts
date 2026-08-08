@@ -9,6 +9,7 @@ import {
 } from "@trawl/tiers"
 import { userCookiesForHost } from "../config"
 import { MitmCa } from "./ca"
+import { handleBrowserLogin, parseLoginFormData } from "./browserLogin"
 import { ChallengeCache } from "./challengeCache"
 import { directForwardHttp, directForwardHttps, type ForwardResult } from "./directForward"
 import { responseFromScrapeResult } from "./responsePolicy"
@@ -400,6 +401,30 @@ async function serveViaScrape(
       writeResponse(stream, 400, Buffer.from(`unsupported method: ${method}`), "text/plain; charset=utf-8")
       return
     }
+
+    // ── Browser-based login interception ─────────────────────────────────────
+    // POST to a login page (e.g. rutracker.org/forum/login.php) cannot go through
+    // the normal scrape() pipeline because CF challenge redirects in the browser
+    // drop the POST body. Instead, we detect login form POSTs, open the login page
+    // in a real browser, fill the form fields, and submit — which survives CF
+    // because the browser sends a genuine POST with cf_clearance already set.
+    const loginData = parseLoginFormData(url, method, body?.toString("utf8"))
+    if (loginData) {
+      if (opts.debug) console.log(`[proxy] login form POST detected for ${url}`)
+      const loginResult = await handleBrowserLogin(url, loginData, opts, opts.deps)
+      if (loginResult) {
+        writeResponseFromBufferMulti(
+          stream,
+          loginResult.statusCode,
+          loginResult.headers,
+          loginResult.body,
+          loginResult.contentType,
+        )
+        return
+      }
+      if (opts.debug) console.log(`[proxy] login handler returned null, falling through to scrape()`)
+    }
+
     const scrapeResult = await scrape(
       {
         url,
@@ -577,6 +602,35 @@ function writeResponseFromBuffer(
     if (lower === "content-length") continue
     if (lower === "content-type") emittedContentType = true
     headerLines.push(`${name}: ${value}`)
+  }
+  if (!emittedContentType) headerLines.push(`Content-Type: ${ct}`)
+  headerLines.push(`Content-Length: ${body.length}`)
+  headerLines.push("Connection: close")
+  sock.write(`${headerLines.join("\r\n")}\r\n\r\n`)
+  sock.write(body)
+  sock.end()
+}
+
+// Variant supporting array-valued headers (e.g. multiple Set-Cookie).
+// Each array value emits its own header line, per RFC 7230 §3.2.2.
+function writeResponseFromBufferMulti(
+  sock: net.Socket,
+  status: number,
+  upstreamHeaders: Record<string, string[]>,
+  body: Buffer,
+  fallbackContentType: string,
+): void {
+  const ct = upstreamHeaders["content-type"]?.[0] ?? fallbackContentType
+  const headerLines: string[] = [`HTTP/1.1 ${status} ${reason(status)}`]
+  let emittedContentType = false
+  for (const [name, values] of Object.entries(upstreamHeaders)) {
+    const lower = name.toLowerCase()
+    if (RESPONSE_HOP_BY_HOP_HEADERS.has(lower)) continue
+    if (lower === "content-length") continue
+    if (lower === "content-type") emittedContentType = true
+    for (const v of values) {
+      headerLines.push(`${name}: ${v}`)
+    }
   }
   if (!emittedContentType) headerLines.push(`Content-Type: ${ct}`)
   headerLines.push(`Content-Length: ${body.length}`)
