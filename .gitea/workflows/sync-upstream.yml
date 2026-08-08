@@ -1,0 +1,74 @@
+name: Sync upstream
+
+on:
+  schedule:
+    # Every 48 hours (00:00 UTC)
+    - cron: "0 0 */2 * *"
+  workflow_dispatch:
+
+env:
+  NOLOGO: 1
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    container:
+      image: gitea.local/fan92rus/ci-runner:latest
+      credentials:
+        username: fan92rus
+        password: ${{ secrets.PACKAGES_TOKEN }}
+      options: >-
+        --add-host gitea.local:192.168.1.96
+    steps:
+      - name: Checkout repository (dev)
+        env:
+          GITEA_TOKEN: ${{ github.token }}
+        run: |
+          git config --global http.https://gitea.local.curloptResolve "gitea.local:443:192.168.1.96"
+          git config --global --add safe.directory "$(pwd)"
+          git clone --depth=1 --branch=dev "https://gitea:$GITEA_TOKEN@gitea.local/fan92rus/Trawl.git" .
+          git remote add upstream https://github.com/germondai/trawl.git
+
+      - name: Fetch upstream and check for new commits
+        id: check
+        run: |
+          git fetch upstream dev || { echo "Fetch upstream failed (network?)"; exit 1; }
+          BEHIND=$(git rev-list --count dev..upstream/dev)
+          echo "behind=$BEHIND" >> $GITHUB_OUTPUT
+          echo "Upstream has $BEHIND new commit(s) behind our dev."
+
+      - name: Merge upstream/dev into dev
+        if: steps.check.outputs.behind != '0'
+        run: |
+          set -euo pipefail
+          if git merge --no-edit upstream/dev 2>&1 | tee /tmp/merge.log; then
+            echo "Merge OK — pushing to gitea"
+          else
+            echo "MERGE_CONFLICT" > /tmp/merge.status
+            git merge --abort
+            exit 1
+          fi
+
+      - name: Push merged dev back to gitea
+        if: steps.check.outputs.behind != '0'
+        env:
+          GITEA_TOKEN: ${{ github.token }}
+        run: |
+          git push "https://gitea:$GITEA_TOKEN@gitea.local/fan92rus/Trawl.git" dev:dev
+          echo "Pushed merged dev to gitea."
+
+      - name: Notify conflict via issue
+        if: failure() && steps.check.outputs.behind != '0'
+        env:
+          GITEA_TOKEN: ${{ github.token }}
+        run: |
+          curl -s -X POST \
+            -H "Authorization: token $GITEA_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"title":"Upstream sync conflict","body":"Automatic merge of germondai/trawl dev failed with conflicts. Resolve manually: git fetch upstream && git merge upstream/dev"}' \
+            "https://gitea.local/api/v1/repos/fan92rus/Trawl/issues" || true
+
+      - name: Notify up-to-date
+        if: steps.check.outputs.behind == '0'
+        run: |
+          echo "dev is already up to date with upstream — nothing to merge."
