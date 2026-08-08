@@ -11,6 +11,36 @@ Self-hosted web scraping engine with best-effort JS challenge and CAPTCHA solvin
 Dedicated flows for Cloudflare, Akamai Bot Manager, and Imperva/Incapsula (best effort), plus Turnstile, reCAPTCHA, hCaptcha, and GeeTest.\
 Much faster and more reliable FlareSolverr & Byparr alternative and drop-in replacement for your \*arr stack.
 
+> ## Fork features
+>
+> This fork adds **user cookie injection** and **MITM forward proxy** improvements for sites like
+> rutracker.org that bind Cloudflare clearance to the solver's TLS fingerprint:
+>
+> - **Per-domain auth cookies** (`USER_COOKIES_JSON`) — inject `bb_session` / `cf_clearance` / any
+>   cookie into every request so the site serves logged-in content without a browser login.
+> - **Browser-based login interception** — detects `POST /login` form submissions in the MITM proxy
+>   path, solves the Cloudflare challenge in the browser, fills credentials, and returns the logged-in
+>   page + `Set-Cookie` headers so Prowlarr / Jackett can store the session.
+> - **CP1251 re-encode** (`CP1251_HOSTS`) — serves HTML as `windows-1251` for indexers (e.g. Prowlarr's
+>   RuTracker parser) that decode responses as cp1251 regardless of charset.
+> - **Raw HTTP body fallback** — after a cold Cloudflare solve the rendered DOM can be incomplete;
+>   TRAWL detects this and serves the full raw HTTP response body instead.
+>
+> ### Docker image
+>
+> ```
+> docker pull ghcr.io/fan92rus/trawl:latest
+> ```
+>
+> ### Quick Prowlarr / Jackett setup
+>
+> 1. Point Prowlarr's global HTTP proxy at `http://trawl:8192` (MITM forward proxy port).
+> 2. Install the TRAWL CA cert (`http://trawl:8191/proxy-ca.crt`) into the Prowlarr container trust store.
+> 3. Add your site's auth cookies to `user_cookies.json` (see `user_cookies.example.json`).
+> 4. Set `CP1251_HOSTS=rutracker.org` if the site uses cp1251.
+>
+> See [`docker-compose.deploy.yml`](docker-compose.deploy.yml) for a ready-to-use compose file.
+
 ## Features
 
 - **2-6x faster** - compared to FlareSolverr or Byparr it returns much faster with higher success rate
