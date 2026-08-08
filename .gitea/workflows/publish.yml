@@ -33,8 +33,17 @@ jobs:
           echo "version=${TAG}-$(date +%s)" >> $GITHUB_OUTPUT
 
       - name: Build Docker image
+        env:
+          DOCKER_BUILDKIT: "1"
         run: |
-          docker build -f apps/api/Dockerfile \
+          # Reuse previously built image as BuildKit inline cache (base layers,
+          # camoufox download, apt, bun install stay cached — only the code layer rebuilds).
+          docker pull gitea.local/fan92rus/trawl/trawl:latest 2>/dev/null || true
+          docker build \
+            --network=host \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --cache-from=gitea.local/fan92rus/trawl/trawl:latest \
+            -f apps/api/Dockerfile \
             -t trawl:${{ steps.semver.outputs.version }} \
             -t trawl:latest .
 
