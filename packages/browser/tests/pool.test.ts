@@ -372,6 +372,27 @@ describe("BrowserPool wedge recovery", () => {
     expect(handle.id).toBe(0)
   })
 
+  test("queueDepth reports acquisitions waiting for a free browser", async () => {
+    const { factory } = makeFactory()
+    const pool = createPool({ poolSize: 1, acquireTimeoutMs: 200, browserFactory: factory })
+    await pool.init()
+
+    expect(pool.getStats().queueDepth).toBe(0)
+
+    // First checkout occupies the only browser; the second must wait.
+    const first = await pool.acquire("example.com")
+    const waiting = pool.acquire("example.com").catch((e: unknown) => e)
+
+    // Give the poll loop a tick — the waiter is now parked.
+    await new Promise((r) => setTimeout(r, 30))
+    expect(pool.getStats().queueDepth).toBe(1)
+
+    pool.release(first.id, first.lease)
+    await waiting // resolves once the first browser is released
+    await new Promise((r) => setTimeout(r, 30))
+    expect(pool.getStats().queueDepth).toBe(0)
+  })
+
   test("a checkout inside the caller's own budget is never reclaimed", async () => {
     // Callers may pass req.maxTimeout larger than the stall threshold. Reclaiming on the
     // threshold alone would close the browser out from under a request that is still

@@ -11,6 +11,7 @@ export function statsRoute() {
       avgRestarts: 0,
       stalled: 0,
       live: 0,
+      queueDepth: 0,
     }
     return {
       browsers: stats.total,
@@ -19,7 +20,7 @@ export function statsRoute() {
       stalled: stats.stalled,
       live: stats.live,
       restarts: stats.restarts,
-      queueDepth: 0,
+      queueDepth: stats.queueDepth,
     }
   })
 }

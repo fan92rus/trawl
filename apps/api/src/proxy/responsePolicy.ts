@@ -75,9 +75,7 @@ export function responseFromScrapeResult(
     if (useRenderedHtml && TRANSFORMED_BODY_HEADERS.has(lower)) continue
     headers[lower] = value
   }
-  headers["content-type"] = bodyIsCp1251
-    ? contentType.replace(/charset=[^;\s]+/i, "charset=windows-1251")
-    : contentType
+  headers["content-type"] = bodyIsCp1251 ? contentType.replace(/charset=[^;\s]+/i, "charset=windows-1251") : contentType
 
   return { body, contentType: headers["content-type"], headers }
 }

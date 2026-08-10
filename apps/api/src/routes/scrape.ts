@@ -37,7 +37,15 @@ export function scrapeRoute() {
         const merged = [...(req.cookies ?? [])]
         for (const uc of userCookies) {
           if (!existingNames.has(uc.name)) {
-            merged.push({ name: uc.name, value: uc.value, domain: uc.domain ?? (host ? `.${host}` : ""), path: uc.path ?? "/", expires: -1, httpOnly: false, secure: false })
+            merged.push({
+              name: uc.name,
+              value: uc.value,
+              domain: uc.domain ?? (host ? `.${host}` : ""),
+              path: uc.path ?? "/",
+              expires: -1,
+              httpOnly: false,
+              secure: false,
+            })
           }
         }
         req.cookies = merged

@@ -94,6 +94,9 @@ export interface PoolStats {
   // and will never call release(). `live` is the honest capacity number.
   stalled: number
   live: number
+  // How many acquire() calls are currently waiting for a free browser. Lets /stats
+  // expose overload instead of a hardcoded 0.
+  queueDepth: number
 }
 
 // Per-instance HTTP-level fingerprint (User-Agent + matching navigator.platform /

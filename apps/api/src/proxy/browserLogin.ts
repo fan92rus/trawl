@@ -127,18 +127,12 @@ export async function handleBrowserLogin(
       ].join(", ")
 
       await Promise.all([
-        page
-          .waitForNavigation({ waitUntil: "domcontentloaded", timeout: 60_000 })
-          .catch((e: Error) => {
-            if (opts.debug) console.log(`[login] nav after submit (non-fatal): ${e.message.split("\n")[0]}`)
-          }),
+        page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 60_000 }).catch((e: Error) => {
+          if (opts.debug) console.log(`[login] nav after submit (non-fatal): ${e.message.split("\n")[0]}`)
+        }),
         page
           .click(submitSelector)
-          .catch(() =>
-            page
-              .press('input[name="login_password"], input[name="password"]', "Enter")
-              .catch(() => {}),
-          ),
+          .catch(() => page.press('input[name="login_password"], input[name="password"]', "Enter").catch(() => {})),
       ])
       await page.waitForTimeout(2000).catch(() => {})
     } else {

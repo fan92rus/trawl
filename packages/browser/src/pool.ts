@@ -90,6 +90,10 @@ export class BrowserPool {
   private healthInterval?: ReturnType<typeof setInterval>
   private abandonedLaunches = 0
   private maxAbandonedLaunches: number
+  // Number of acquire() calls currently polling for a free browser. Lets /stats
+  // report a real queueDepth (was hardcoded 0) so overload is observable instead
+  // of looking like idle capacity.
+  private waitingCount = 0
 
   constructor({
     poolSize,
@@ -338,14 +342,20 @@ export class BrowserPool {
 
       if (tryAcquire()) return
 
+      this.waitingCount++
       const deadline = Date.now() + this.acquireTimeoutMs
       const poll = setInterval(() => {
         if (tryAcquire()) {
+          this.waitingCount--
           clearInterval(poll)
           return
         }
         if (Date.now() >= deadline) {
+          this.waitingCount--
           clearInterval(poll)
+          console.warn(
+            `[pool] acquire timed out after ${this.acquireTimeoutMs}ms (${this.waitingCount} still waiting, ${this.entries.length} browsers)`,
+          )
           reject(new PoolExhaustedError())
         }
       }, this.pollIntervalMs)
@@ -580,6 +590,7 @@ export class BrowserPool {
       // Real capacity: idle-and-connected plus in-flight-and-connected. Excludes
       // restarting entries, wedged checkouts, and checkouts whose browser has died.
       live: available + busyLive,
+      queueDepth: this.waitingCount,
     }
   }
 
