@@ -2,11 +2,12 @@ import { ProxyPool } from "@trawl/tiers"
 
 export const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379"
 export const PORT = Number(process.env.PORT ?? "8191")
-export const POOL_SIZE = Number(process.env.BROWSER_POOL_SIZE ?? "3")
+export const POOL_SIZE = Number(process.env.BROWSER_POOL_SIZE ?? "5")
 // How long acquire() will poll for a free browser before rejecting with PoolExhaustedError.
-// 15s covers a full CF challenge burst with pool=3 (queue depth 7, slowest finishes at ~12s).
+// 120s lets a burst of ~15 parallel scrapes queue behind a busy pool (pool=5, slowest
+// solve ~12-20s) without returning 429; ReLampa's own 429/503 retry loop covers the rest.
 // Tune lower for fast-fail feedback in dev; tune higher for very heavy upstream targets.
-export const ACQUIRE_TIMEOUT_MS = Number(process.env.BROWSER_ACQUIRE_TIMEOUT_MS ?? "15000")
+export const ACQUIRE_TIMEOUT_MS = Number(process.env.BROWSER_ACQUIRE_TIMEOUT_MS ?? "120000")
 export const SESSION_TTL = Number(process.env.SESSION_TTL_SECONDS ?? "3600")
 export const RECYCLE_AFTER_TEMPORARY_CONTEXTS = Number(process.env.BROWSER_RECYCLE_AFTER_CONTEXTS ?? "8")
 // Caps Firefox content processes per browser. Default `2` keeps thread/RAM footprint
