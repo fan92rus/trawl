@@ -10,6 +10,7 @@ const stats = (live: number): PoolStats => ({
   avgRestarts: 0,
   stalled: live ? 0 : 1,
   live,
+  queueDepth: 0,
 })
 
 describe("GET /health", () => {

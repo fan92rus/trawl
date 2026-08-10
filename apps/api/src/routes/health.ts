@@ -33,6 +33,7 @@ export function healthRoute(getStats = () => getPool()?.getStats()) {
           avgRestarts: 0,
           stalled: 0,
           live: 0,
+          queueDepth: 0,
         } satisfies PoolStats),
     }
   })
