@@ -67,10 +67,10 @@ When the timeout fires, both `/v1` and `/scrape` return **HTTP 429** with the Fl
 
 **Default:** `8`
 
-How many `blocked` / `needs-js` outcomes a pooled browser can produce before TRAWL restarts the full browser process. The recycle counter only increments when Tier 3 or Tier 4 reports the upstream actively rejected the browser's profile — successful solves preserve cookies, `cf_clearance`, and warm fingerprint state. This avoids the HTTP-429 storm that occurred when the pool preemptively recycled mid-flight (issue #17).
+How many Tier 3 or Tier 4 temporary contexts a pooled browser can create before TRAWL rolling-replaces the full browser process. Every context counts, regardless of whether the attempt succeeds, times out, errors, or is blocked. TRAWL warms one replacement while the existing browser remains available, installs it when the entry is idle, then closes the retired browser. This briefly raises the pool by one browser, and replacements are serialized pool-wide to bound that peak.
 
 ```ini
-BROWSER_RECYCLE_AFTER_CONTEXTS=8   # default - recycle after 8 blocked/needs-js outcomes
+BROWSER_RECYCLE_AFTER_CONTEXTS=8   # default - replace after 8 Tier 3/4 contexts
 BROWSER_RECYCLE_AFTER_CONTEXTS=0   # disable browser recycling entirely
 ```
 
@@ -83,6 +83,33 @@ Caps Firefox content processes per pooled browser via the `dom.ipc.processCount`
 ```ini
 BROWSER_CONTENT_PROCESSES=2   # default - conservative cap, lowest RAM/CPU
 BROWSER_CONTENT_PROCESSES=4   # raise if CF/Imperva challenges stall
+```
+
+### `BROWSER_HEADFUL_POOL_SIZE`
+
+**Default:** `0` (disabled)
+
+Browsers in the headful sub-pool. This pool runs behind an Xvfb virtual display and serves
+DataDome Device Check escalations that require a browser running behind a display.
+
+Set it to `1` to scrape DataDome targets. It is off by default because the sub-pool is
+**additional to `BROWSER_POOL_SIZE`**: one headful browser plus its X display measures about
+380 MB (a headful browser is roughly twice a headless one, and Xvfb adds ~65 MB), so leaving
+it on would move the memory ceiling of deployments that never meet DataDome. Account for it
+in `mem_limit` before enabling.
+
+When enabled, the sub-pool is warmed during API startup. A launch failure therefore fails
+startup instead of delaying an individual scrape.
+Readiness at `/health` reports the main pool only; the sub-pool appears under `headful` at
+`/stats`, and reads `null` while disabled.
+
+With the sub-pool disabled, a DataDome escalation fails immediately with a configuration error.
+
+The container images ship the `xvfb` binary.
+
+```ini
+BROWSER_HEADFUL_POOL_SIZE=0   # default - no headful browser
+BROWSER_HEADFUL_POOL_SIZE=1   # required for DataDome targets, ~380 MB on first use
 ```
 
 ### Browser recovery timeouts
@@ -114,6 +141,8 @@ SESSION_TTL_SECONDS=1800   # more conservative
 ## Proxies
 
 ### `PROXY_URL`
+
+These environment-level proxies are escalation pools: direct Tier 1 and cached Tier 2 may complete before they are used. In contrast, the API request-level `proxy` field is a routing guarantee; target traffic for that request never falls back to a direct connection.
 
 **Default:** _(empty — no proxy)_
 

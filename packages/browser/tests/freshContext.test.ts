@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { newFreshContext } from "../src/pool"
+import { closeTemporaryContext, newFreshContext } from "../src/pool"
 import { toPlaywrightProxy } from "../src/proxy"
 
 describe("newFreshContext", () => {
@@ -35,5 +35,34 @@ describe("newFreshContext", () => {
       username: "user@org",
       password: "p:ass",
     })
+  })
+
+  test("closes a partially initialized context", async () => {
+    let closed = false
+    let created = 0
+    const browser = {
+      newContext: async () => ({
+        addInitScript: async () => {
+          throw new Error("init failed")
+        },
+        close: async () => {
+          closed = true
+        },
+      }),
+    }
+    await expect(newFreshContext(browser, { onCreated: () => created++ })).rejects.toThrow("init failed")
+    expect(created).toBe(1)
+    expect(closed).toBe(true)
+  })
+
+  test("cleanup timeout requests a rolling replacement", async () => {
+    let reason = ""
+    await closeTemporaryContext(
+      { close: () => new Promise<void>(() => {}) },
+      (value) => (reason = value),
+      "cleanup wedged",
+      10,
+    )
+    expect(reason).toBe("cleanup wedged")
   })
 })

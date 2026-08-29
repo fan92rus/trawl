@@ -1,4 +1,4 @@
-import { getPool } from "./deps"
+import { shutdownPools } from "./deps"
 
 export interface LifecycleOptions {
   onShutdown?: () => Promise<void>
@@ -27,7 +27,7 @@ export const registerLifecycleHandlers = (opts: LifecycleOptions = {}): void => 
         console.error("[api] onShutdown error:", err instanceof Error ? err.message : err)
       }
     }
-    await getPool()?.shutdown()
+    await shutdownPools()
     process.exit(0)
   }
 

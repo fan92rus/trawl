@@ -25,7 +25,7 @@ export interface ScrapeRequest {
   headers?: Record<string, string>
   method?: SupportedMethod
   body?: string
-  // Per-request proxy override — bypasses the server-configured proxy pool for this call.
+  // Strict per-request route: target traffic must use this proxy and never fall back direct.
   proxy?: string
   // Optional auth/session cookies injected into the browser context BEFORE navigation.
   // Needed for sites that require login (e.g. rutracker.org) — the cookies are sent to
@@ -52,7 +52,7 @@ export interface ScrapeResult {
   timings: TierResult[]
   totalMs: number
   captchasSolved?: string[] // captcha types solved during this request (e.g. ['turnstile', 'recaptcha-v2'])
-  proxyUsed?: boolean // true if the winning tier routed through a proxy (Tier 3 datacenter pool or Tier 4 residential pool/override)
+  proxyUsed?: boolean // true if the winning tier routed through a proxy (Tier 1, 3, or 4)
   // Raw response payload — populated by all tiers when available. The MITM proxy
   // (:8192) consumes this; /scrape and FlareSolverr /v1 still rely on `html` only.
   // Binary content (images, .torrent, videos) MUST use this field — `html` would
@@ -115,6 +115,8 @@ export interface BrowserFingerprint {
 // (consumers call .newPage()/.newContext()/.cookies() etc directly on these fields).
 export interface BrowserHandle {
   id: number
+  /** Whether this lease belongs to a browser running behind a virtual display. */
+  headful: boolean
   // Identifies this specific checkout. Pass it back to release() so a request that
   // outlived its checkout can't free a browser the pool has since reclaimed.
   lease: number
@@ -123,7 +125,8 @@ export interface BrowserHandle {
   // biome-ignore lint/suspicious/noExplicitAny: see comment above
   browser: any
   fingerprint: BrowserFingerprint
-  noteTemporaryContext?: (reason: string) => void
+  noteTemporaryContext?: () => void
+  requestBrowserReplacement?: (reason: string) => void
 }
 
 // Per-request proxy override as it arrives at the API. Prowlarr's Cardigann flow

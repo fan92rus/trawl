@@ -1,5 +1,5 @@
 export { FINGERPRINT, FINGERPRINT_POOL } from "./fingerprint"
 export type { BrowserHandle } from "./pool"
-export { BrowserPool, newFreshContext, PoolExhaustedError } from "./pool"
+export { BrowserPool, closeTemporaryContext, newFreshContext, PoolExhaustedError } from "./pool"
 export { type PlaywrightProxy, toPlaywrightProxy } from "./proxy"
 export { SessionCache } from "./session"

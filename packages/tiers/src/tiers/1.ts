@@ -1,7 +1,12 @@
 import { FINGERPRINT } from "@trawl/browser"
 import type { Cookie, TierResult } from "@trawl/types"
+import type { ChallengeType } from "../utils/detect"
 import {
+  getAwsWafAction,
+  getDataDomeAction,
   hasAkamaiChallenge,
+  hasAwsWafCaptcha,
+  hasAwsWafChallenge,
   hasHcaptcha,
   hasRecaptcha,
   hasTurnstile,
@@ -9,10 +14,15 @@ import {
   isCloudflarePage,
 } from "../utils/detect"
 import { normalizeHtml } from "../utils/html"
+import { normalizeProxyError, proxyResponseFailure } from "../utils/proxyFailure"
 import { isTextContentType } from "../utils/response"
 
 export interface Tier1Result extends TierResult {
   tier: 1
+  // The wall Tier 1 recognized, when it recognized one. The orchestrator routes the
+  // browser it acquires for the later tiers on this: DataDome needs a headful one.
+  challenge?: ChallengeType
+  effectiveUrl?: string
   html?: string
   body?: Uint8Array
   responseHeaders?: Record<string, string>
@@ -30,6 +40,7 @@ export async function runTier1(
   method?: string,
   body?: string,
   requestCookies?: Cookie[],
+  proxy?: string,
 ): Promise<Tier1Result> {
   const start = Date.now()
   try {
@@ -59,17 +70,50 @@ export async function runTier1(
       body: METHODS_WITH_BODY.has(m) ? body : undefined,
       headers,
       redirect: "follow",
+      ...(proxy ? { proxy } : {}),
     })
 
-    // Preserve raw bytes — required for binary content (.torrent, images, etc.).
-    // The MITM proxy (:8192) consumes `body`; /scrape still consumes `html`.
-    const rawBytes = new Uint8Array(await res.arrayBuffer())
-
+    // AWS WAF's action header is authoritative when paired with its documented
+    // status. Inspect it before reading the body: challenge responses may keep the
+    // body open, and waiting for arrayBuffer() would delay browser escalation.
     const responseHeaders: Record<string, string> = {}
     res.headers.forEach((v, k) => {
       responseHeaders[k] = v
     })
+    const setCookies = res.headers.getSetCookie()
+    if (setCookies.length > 0) responseHeaders["set-cookie"] = setCookies.join("\n")
     const contentType = responseHeaders["content-type"] ?? "application/octet-stream"
+    const proxyFailure = proxy ? proxyResponseFailure(res.status, responseHeaders) : undefined
+    if (proxyFailure) {
+      return {
+        tier: 1,
+        status: "error",
+        durationMs: Date.now() - start,
+        reason: proxyFailure,
+        responseHeaders,
+        contentType,
+        body: new Uint8Array(),
+        statusCode: res.status,
+      }
+    }
+    const awsAction = getAwsWafAction(res.status, responseHeaders)
+    if (awsAction) {
+      return {
+        tier: 1,
+        status: awsAction === "captcha" ? "blocked" : "needs-js",
+        durationMs: Date.now() - start,
+        reason: awsAction === "captcha" ? "aws-waf-captcha-required" : "aws-waf-challenge",
+        challenge: "aws-waf",
+        responseHeaders,
+        contentType,
+        body: new Uint8Array(),
+        statusCode: res.status,
+      }
+    }
+
+    // Preserve raw bytes — required for binary content (.torrent, images, etc.).
+    // The MITM proxy (:8192) consumes `body`; /scrape still consumes `html`.
+    const rawBytes = new Uint8Array(await res.arrayBuffer())
 
     // Decode a bounded preview losslessly for challenge detection — keeps the original
     // byte buffer untouched. `fatal: false` replaces invalid sequences with U+FFFD
@@ -83,6 +127,7 @@ export async function runTier1(
         status: "needs-js",
         durationMs: Date.now() - start,
         reason: "cloudflare-challenge",
+        challenge: "cloudflare-interstitial",
         responseHeaders,
         contentType,
         body: rawBytes,
@@ -101,6 +146,7 @@ export async function runTier1(
         status: "needs-js",
         durationMs: Date.now() - start,
         reason: "hcaptcha-shell",
+        challenge: "hcaptcha",
         responseHeaders,
         contentType,
         body: rawBytes,
@@ -113,6 +159,7 @@ export async function runTier1(
         status: "needs-js",
         durationMs: Date.now() - start,
         reason: "recaptcha-shell",
+        challenge: "recaptcha",
         responseHeaders,
         contentType,
         body: rawBytes,
@@ -125,6 +172,7 @@ export async function runTier1(
         status: "needs-js",
         durationMs: Date.now() - start,
         reason: "turnstile-shell",
+        challenge: "cloudflare-turnstile",
         responseHeaders,
         contentType,
         body: rawBytes,
@@ -137,6 +185,56 @@ export async function runTier1(
         status: "needs-js",
         durationMs: Date.now() - start,
         reason: "akamai-interstitial",
+        challenge: "akamai",
+        responseHeaders,
+        contentType,
+        body: rawBytes,
+        statusCode: res.status,
+      }
+    }
+    if (hasAwsWafCaptcha(previewText, responseHeaders, res.status)) {
+      return {
+        tier: 1,
+        status: "blocked",
+        durationMs: Date.now() - start,
+        reason: "aws-waf-captcha-required",
+        challenge: "aws-waf",
+        responseHeaders,
+        contentType,
+        body: rawBytes,
+        statusCode: res.status,
+      }
+    }
+    if (hasAwsWafChallenge(previewText, responseHeaders, res.status)) {
+      return {
+        tier: 1,
+        status: "needs-js",
+        durationMs: Date.now() - start,
+        reason: "aws-waf-challenge",
+        challenge: "aws-waf",
+        responseHeaders,
+        contentType,
+        body: rawBytes,
+        statusCode: res.status,
+      }
+    }
+
+    // DataDome answers with 403 for every wall, so this must run before the generic
+    // isBlocked() check: only the Device Check is worth a browser, the slider and the
+    // hard block are not.
+    const dataDomeAction = getDataDomeAction(previewText, responseHeaders, res.status)
+    if (dataDomeAction) {
+      return {
+        tier: 1,
+        status: dataDomeAction === "interstitial" ? "needs-js" : "blocked",
+        durationMs: Date.now() - start,
+        reason:
+          dataDomeAction === "interstitial"
+            ? "datadome-interstitial"
+            : dataDomeAction === "captcha"
+              ? "datadome-captcha-required"
+              : "datadome-blocked",
+        challenge: "datadome",
         responseHeaders,
         contentType,
         body: rawBytes,
@@ -161,6 +259,7 @@ export async function runTier1(
       tier: 1,
       status: "success",
       durationMs: Date.now() - start,
+      effectiveUrl: res.url,
       // `html` is best-effort text view of the body — only meaningful for text-like
       // content-types. Empty for binary payloads so /scrape consumers see the body
       // is binary via the contentType field. `previewText` is bounded to 4 KiB for
@@ -181,7 +280,7 @@ export async function runTier1(
       tier: 1,
       status: "error",
       durationMs: Date.now() - start,
-      reason: err instanceof Error ? err.message : String(err),
+      reason: proxy ? normalizeProxyError(err) : err instanceof Error ? err.message : String(err),
     }
   }
 }

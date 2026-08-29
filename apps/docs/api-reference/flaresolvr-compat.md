@@ -30,7 +30,7 @@ interface FlareSolverrRequest {
 | `url`        | string | Yes      | The URL to scrape                                                                                                                                                                                                                   |
 | `maxTimeout` | number | No       | Max wait in ms (default 60000)                                                                                                                                                                                                      |
 | `postData`   | string | No       | POST body (only for `request.post`). On TRAWL's native `/scrape` endpoint this field is named `body`; the `/v1` adapter maps `postData` → `body` internally so the FlareSolverr wire contract stays unchanged for existing callers. |
-| `headers`    | object | No       | Custom headers forwarded to the target across all tiers — see [Custom Headers](/api-reference/custom-headers)                                                                                                                       |
+| `headers`    | object | No       | Custom headers forwarded to the target across all tiers — see [Custom Headers](/api-reference/custom-headers). For Prowlarr compatibility, `contentType` is accepted as `Content-Type`; serialized `contentLength` is ignored and recalculated by the HTTP client. An explicit standard `Content-Type` takes precedence. |
 | `proxy`      | string | No       | **TRAWL-specific extension** (not in the real FlareSolverr v2 contract) — per-request proxy override for Tier 3/4, see [Configuration § Proxies](/getting-started/configuration#proxies)                                            |
 
 ## Response
@@ -118,6 +118,10 @@ cookies = data['solution']['cookies']
 
 ### POST request
 
+POST requests with `postData` must supply a content type. TRAWL accepts either a standard
+`Content-Type` header or Prowlarr's serialized `headers.contentType` representation at this
+compatibility endpoint. Native `/scrape` requests continue to require the standard header.
+
 ```bash
 curl -s -X POST http://localhost:8191/v1 \
   -H "Content-Type: application/json" \
@@ -125,6 +129,7 @@ curl -s -X POST http://localhost:8191/v1 \
     "cmd": "request.post",
     "url": "https://example.com/api/login",
     "postData": "username=user&password=pass",
+    "headers": { "Content-Type": "application/x-www-form-urlencoded" },
     "maxTimeout": 30000
   }'
 ```

@@ -168,7 +168,7 @@ export async function handleBrowserLogin(
     return null
   } finally {
     if (page) await page.close().catch(() => {})
-    deps.releaseBrowser(handle.id, handle.lease)
+    deps.releaseBrowser(handle)
   }
 }
 

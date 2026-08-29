@@ -17,7 +17,7 @@ For security issues, **do not open a public issue** — see [SECURITY.md](SECURI
 
 ## Development setup
 
-Requirements: **Bun ≥ 1.1** and **Docker** (for the Redis service used in tests).
+Requirements: **Bun 1.4.0** and **Docker** (for the Redis service used in tests).
 
 ```bash
 git clone https://github.com/germondai/trawl.git
@@ -41,12 +41,14 @@ The API requires Redis. The fastest way is `docker compose up -d redis`.
 We use [Biome](https://biomejs.dev/) for both:
 
 ```bash
-bun run lint        # check
-bun run format      # write
-bun run check       # format + lint + import sort, write
+bun run check       # read-only format, lint, and import-order check
+bun run fix         # apply safe Biome fixes and formatting
+bun run typecheck   # typecheck all five TypeScript workspaces
+bun run build       # production-build the web and docs apps
+bun run verify      # full release gate: check, types, tests, and builds
 ```
 
-CI runs `bun run lint` on every PR.
+CI runs `bun run verify` on every PR.
 
 ## Project layout
 
@@ -81,7 +83,7 @@ The `type` is one of `feat`, `fix`, `chore`, `docs`, `ci`, `refactor`, `test`, `
 
 1. **Open an issue first** for non-trivial changes. A two-paragraph problem statement is enough.
 2. **Branch from `main`.** Use a descriptive name (`feat/captcha-hcaptcha`, `fix/redis-reconnect`).
-3. **Run `bun run check` before pushing.** Lint and format must be clean.
+3. **Run `bun run verify` before pushing.** Lint, types, tests, and production builds must be clean.
 4. **Update `CHANGELOG.md`** under `## [Unreleased]` for any user-visible change.
 5. **Fill out the PR template** — the checklist catches the easy-to-miss items.
 6. **Keep PRs focused.** One feature or fix per PR; large refactors should be split.

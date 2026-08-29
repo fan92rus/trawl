@@ -8,7 +8,17 @@ import { getDeps, getPool } from "../deps"
 import { normalizeRequestCookies, requestUrl, validateFlareSolverrRequest } from "../validation"
 
 // FlareSolverr v2 compat — always open (the v2 spec has no auth header)
-export function v1Route() {
+interface V1RouteOptions {
+  runScrape?: typeof scrape
+  poolReady?: () => boolean
+  orchestratorDeps?: typeof getDeps
+}
+
+export function v1Route({
+  runScrape = scrape,
+  poolReady = () => Boolean(getPool()),
+  orchestratorDeps = getDeps,
+}: V1RouteOptions = {}) {
   return new Elysia().post("/v1", async ({ body, set }) => {
     const startTimestamp = Date.now()
 
@@ -22,7 +32,7 @@ export function v1Route() {
         return flareSolverrError(req.url, `Unknown cmd: ${cmd}`)
       }
 
-      if (!getPool()) {
+      if (!poolReady()) {
         set.status = 503
         return flareSolverrError(req.url, "Browser pool initializing, retry in a few seconds")
       }
@@ -58,7 +68,7 @@ export function v1Route() {
       }
 
       const scrapeRequest = buildScrapeRequestFromFlareSolverr(req)
-      const result = await scrape(scrapeRequest, getDeps())
+      const result = await runScrape(scrapeRequest, orchestratorDeps())
       return {
         status: "ok",
         message: "",

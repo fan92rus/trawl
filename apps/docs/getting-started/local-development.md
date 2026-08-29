@@ -36,7 +36,7 @@ This downloads the browser into the local cache. It only needs to run once per m
 ## 3. Start Redis
 
 ```bash
-docker run -d --name trawl-redis -p 6379:6379 redis:8.8-alpine
+docker run -d --name trawl-redis -p 6379:6379 redis:8.8.1-alpine
 ```
 
 Or use any Redis-protocol-compatible server you already have.

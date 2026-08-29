@@ -1,0 +1,68 @@
+import { describe, expect, test } from "bun:test"
+import { once } from "node:events"
+import http from "node:http"
+import net from "node:net"
+import { serializeResponseHeaders } from "../httpResponse"
+
+describe("proxy response serialization", () => {
+  test.each([false, true])("emits each cookie as a valid field for streamed=%s", (streamed) => {
+    const head = serializeResponseHeaders(
+      200,
+      {
+        "content-type": "text/html",
+        "set-cookie": "session=one; Expires=Wed, 21 Oct 2030 07:28:00 GMT; Path=/\n \nclearance=two; Path=/; HttpOnly",
+      },
+      "application/octet-stream",
+      streamed ? { streamed: true } : { bodyLength: 0 },
+    )
+    const lines = head.split("\r\n")
+    expect(lines.filter((line) => line.toLowerCase().startsWith("set-cookie:"))).toEqual([
+      "set-cookie: session=one; Expires=Wed, 21 Oct 2030 07:28:00 GMT; Path=/",
+      "set-cookie: clearance=two; Path=/; HttpOnly",
+    ])
+    expect(lines).not.toContain("clearance=two; Path=/; HttpOnly")
+  })
+
+  test("leaves a single cookie unchanged", () => {
+    const head = serializeResponseHeaders(200, { "set-cookie": "session=one; Path=/" }, "text/plain", {
+      bodyLength: 0,
+    })
+    expect(head.match(/set-cookie:/gi)).toHaveLength(1)
+    expect(head).toContain("set-cookie: session=one; Path=/\r\n")
+  })
+
+  test("is accepted by a strict HTTP parser as two separate cookie fields", async () => {
+    const body = Buffer.from("ok")
+    const head = serializeResponseHeaders(
+      200,
+      {
+        "content-type": "text/plain",
+        "set-cookie": "session=one; Expires=Wed, 21 Oct 2030 07:28:00 GMT; Path=/\r\nclearance=two; Path=/; Secure",
+      },
+      "text/plain",
+      { bodyLength: body.length },
+    )
+    const server = net.createServer((socket) => {
+      socket.once("data", () => socket.end(Buffer.concat([Buffer.from(head), body])))
+    })
+    server.listen(0, "127.0.0.1")
+    await once(server, "listening")
+    const address = server.address()
+    if (!address || typeof address === "string") throw new Error("test server did not bind")
+
+    try {
+      const response = await new Promise<http.IncomingMessage>((resolve, reject) => {
+        http.get({ host: "127.0.0.1", port: address.port, path: "/" }, resolve).once("error", reject)
+      })
+      response.resume()
+      await once(response, "end")
+      expect(response.headers["set-cookie"]).toEqual([
+        "session=one; Expires=Wed, 21 Oct 2030 07:28:00 GMT; Path=/",
+        "clearance=two; Path=/; Secure",
+      ])
+      expect(response.rawHeaders.filter((header) => header.toLowerCase() === "set-cookie")).toHaveLength(2)
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+    }
+  })
+})

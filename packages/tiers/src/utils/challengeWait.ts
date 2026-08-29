@@ -13,10 +13,13 @@ export async function waitForChallengeResolution(
   page: Page,
   timeoutMs: number,
   originalUrl?: string,
+  responseHeaders: () => Record<string, string> = () => ({}),
 ): Promise<"ok" | "ip-blocked" | "timeout"> {
   const deadline = Date.now() + Math.max(timeoutMs, 30_000)
   let lastClickAttempt = 0
   let cfClearanceAt: number | undefined
+  let challengeSeen = false
+  let inactiveSamples = 0
 
   // Only count cf_clearance for the current domain — warm browser may have cookies from prior domains
   const targetHost = (() => {
@@ -27,25 +30,36 @@ export async function waitForChallengeResolution(
     }
   })()
 
-  const earlyTitle = await page.title().catch(() => "")
-  if (earlyTitle && !CF_CHALLENGE_TITLE.test(earlyTitle)) {
-    await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {})
-    return "ok"
-  }
-
   // Let CF's challenge JS boot up before we start polling
-  await new Promise((r) => setTimeout(r, 1000))
+  await new Promise((r) => setTimeout(r, 300))
 
   while (Date.now() < deadline) {
     try {
-      const title = await page.title().catch(() => "just a moment")
-      if (!CF_CHALLENGE_TITLE.test(title)) {
+      const title = await page.title().catch(() => "")
+      const html = await page.content().catch(() => "")
+      const url = page.url()
+      const hasChallengeFrame = page.frames().some(isChallengeFrame)
+      const active =
+        CF_CHALLENGE_TITLE.test(title) ||
+        isCloudflarePage(html, responseHeaders()) ||
+        /\/cdn-cgi\/challenge-platform|\/cdn-cgi\/challenge\//i.test(url) ||
+        hasChallengeFrame
+
+      if (!active) {
+        inactiveSamples++
+      } else {
+        challengeSeen = true
+        inactiveSamples = 0
+      }
+
+      // Two observations prevent a transient normal title/DOM during navigation from
+      // declaring a challenge solved. This also applies before the first active sample.
+      if (inactiveSamples >= 2) {
         // 'load' not 'networkidle' — networkidle stalls indefinitely on JS-heavy pages
         await page.waitForLoadState("load", { timeout: 5000 }).catch(() => {})
         return "ok"
       }
 
-      const url = page.url()
       if (/\/cdn-cgi\/error\/|error=1020|error=1015/.test(url)) return "ip-blocked"
 
       const cookies: Array<{ name: string; domain: string }> = await page
@@ -60,7 +74,7 @@ export async function waitForChallengeResolution(
             c.domain === `.${targetHost}` ||
             targetHost.endsWith(c.domain.replace(/^\./, ""))),
       )
-      if (hasDomainClearance) {
+      if (hasDomainClearance && challengeSeen) {
         if (cfClearanceAt === undefined) {
           cfClearanceAt = Date.now()
           console.log("[challenge] cf_clearance obtained")

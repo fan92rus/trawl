@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **DataDome support.** Detect Device Check, slider CAPTCHA and `t=bv` hard blocks from challenge markers and `x-dd-b`. Device Check uses a dedicated waiter and an optional headful Xvfb pool; the slider is reported as `datadome-captcha-required`. Enable startup-warmed capacity with `BROWSER_HEADFUL_POOL_SIZE=1` (off by default).
+- **AWS WAF Challenge support.** Detect the documented `202` Challenge and `405` CAPTCHA responses from their `x-amzn-waf-action` header, with a conservative two-marker HTML fallback. Silent challenges use a dedicated browser waiter for the domain-matching `aws-waf-token`; interactive CAPTCHA is surfaced as `aws-waf-captcha-required` for a future solver.
+
+### Fixed
+- Wait for the bundled Redis service to pass a `PING` healthcheck before starting TRAWL, preventing a transient Compose startup race from disabling the Tier 2 session cache for the process lifetime (#90).
+- Reap orphaned Camoufox processes in both API container variants by running Bun under Tini (#79).
+- Preserve every upstream `Set-Cookie` field across direct, Tier 1, and browser-backed proxy responses, serializing each cookie as its own HTTP header instead of dropping or malformedly folding repeated values (#64).
+- Treat an explicit request-level `proxy` as a strict routing guarantee: route HTTP(S) Tier 1 requests through it, skip direct Tier 1 for SOCKS, bypass the unproxied Tier 2 cache, prevent proxy-derived sessions from entering the shared domain cache, disable Firefox direct failover, and surface authentication, transport, protocol, and `Proxy-Status` failures as errors instead of successful content (#73).
+
+## [1.4.2] - 2026-08-22
+
+### Changed
+- Bump all application and internal package versions to `1.4.2`.
+
+### Fixed
+- Detect and resolve DDoS-Guard JS interstitials without misclassifying them as Cloudflare challenges (#66).
+
+## [1.4.1] - 2026-08-21
+
+### Changed
+- Bump all application and internal package versions to `1.4.1`.
+- Update the container and development runtime to Bun 1.4.0, Biome to 2.5.10, Bun types to 1.4.0, Patchright to 1.62.1, Nuxt SEO to 5.3.14, and vue-tsc to 3.3.11.
+- Update GeoLite2 City to 2026.08.19 after the previously pinned upstream release became unavailable.
+- Keep Playwright Core on 1.60.0 for Camoufox compatibility and the Nuxt app on TypeScript 5.9.3 for vue-tsc compatibility; other workspaces use TypeScript 7.0.2.
+
+### Fixed
+- Remove the unused native TypeScript compiler from both production API images and fail image builds if a native `@typescript/typescript-*` artifact is present, eliminating its fixable HIGH runtime CVEs (#68).
+
+## [1.4.0] - 2026-08-10
+
+### Changed
+- **Cold-start performance milestone:** TRAWL's complete first request, including browser launch, is now nearly **4x faster** in like-for-like Docker benchmarks. Redis validation and browser warmup now run concurrently, Tier 0 becomes available immediately, and browser capacity is published progressively. Warm-request timings vary with browser state, session caching, and challenge behavior and are not included in this cold-start comparison.
+- Bump all application and internal package versions to `1.4.0`.
+- Update Biome to 2.5.7, Memoirist to 1.2.2, Nuxt to 4.5.2, and Nuxt SEO to 5.3.11. TypeScript remains on 5.9.3 for the Nuxt app and Playwright remains on 1.60.0 for Camoufox compatibility.
+- Update GitHub Actions to their current stable major releases and make the CI release gate read-only and reproducible.
+- Pin the runtime to Bun 1.3.14, Camoufox v152.0.4-beta.28, GeoLite2 City 2026.08.07, and Redis 8.8.1, with SHA-256 verification for downloaded browser/runtime data assets.
+- The remaining audit findings are confined to Nuxt/VitePress development and build-time dependency trees; no compatible upstream update is currently available for those transitive packages.
+
+### Fixed
+- Support explicit non-root Docker users by baking the pinned uBlock Origin addon into both API image variants and using a writable temporary home directory. Document CA volume ownership and read-only container requirements (#60).
+- Reduce cold-start latency by warming Redis alongside the browser pool, publishing the first browser immediately, warming the remaining browsers concurrently, and accepting Tier 0 proxy traffic during warmup. Unavailable Redis now disables Tier 2 promptly instead of delaying the first request. Tier 0 also handles informational HTTP responses correctly and escalates authoritative `cf-mitigated: challenge` headers immediately.
+- Keep browser-tier status, headers, content type, and raw body aligned with the latest main-frame navigation response across redirects, and prevent persistent Cloudflare challenges from being returned as successful rendered pages (#53).
+- Translate Prowlarr's serialized `headers.contentType` metadata at the FlareSolverr `/v1` compatibility boundary and discard `contentLength`, allowing form POST requests to enter the scraper pipeline (#50).
+- Bound Camoufox memory growth by counting every Tier 3/4 temporary context and rolling-replacing browsers at `BROWSER_RECYCLE_AFTER_CONTEXTS`, while keeping existing capacity available during warm-up. Replacement launches are serialized, cleanup is timeout-bounded, and failed launches retain the usable browser (#52).
+
 ## [1.3.1] - 2026-08-02
 
 ### Fixed

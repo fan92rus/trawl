@@ -2,9 +2,37 @@ import type { SupportedMethod } from "@trawl/tiers"
 import { normalizeProxy, requireContentTypeForBody, sanitizeHeaders } from "@trawl/tiers"
 import type { FlareSolverrRequest, FlareSolverrResponse, ScrapeRequest } from "@trawl/types"
 
+function normalizeProwlarrHeaders(headers?: Record<string, string>): Record<string, string> | undefined {
+  if (!headers) return
+
+  const normalized: Record<string, string> = {}
+  let serializedContentType: string | undefined
+  let hasStandardContentType = false
+
+  for (const [name, value] of Object.entries(headers)) {
+    const lowerName = name.trim().toLowerCase()
+    if (lowerName === "contenttype") {
+      serializedContentType ??= value
+      continue
+    }
+    if (lowerName === "contentlength") continue
+    if (lowerName === "content-type") hasStandardContentType = true
+    normalized[name] = value
+  }
+
+  // Prowlarr serializes these HttpHeader properties without HTTP's hyphens.
+  // Keep an explicitly supplied standard header authoritative, even if invalid;
+  // the normal body validation below will then reject an empty value.
+  if (!hasStandardContentType && serializedContentType !== undefined) {
+    normalized["Content-Type"] = serializedContentType
+  }
+
+  return normalized
+}
+
 export function buildScrapeRequestFromFlareSolverr(req: FlareSolverrRequest): ScrapeRequest {
   const method: SupportedMethod = req.cmd === "request.post" ? "POST" : "GET"
-  const headers = sanitizeHeaders(req.headers)
+  const headers = sanitizeHeaders(normalizeProwlarrHeaders(req.headers))
   requireContentTypeForBody(headers, Boolean(req.postData))
   return {
     url: req.url,

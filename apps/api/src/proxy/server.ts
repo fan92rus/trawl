@@ -12,6 +12,12 @@ import { handleBrowserLogin, parseLoginFormData } from "./browserLogin"
 import { MitmCa } from "./ca"
 import { ChallengeCache } from "./challengeCache"
 import { directForwardHttp, directForwardHttps, type ForwardResult } from "./directForward"
+import {
+  writeResponse,
+  writeResponseFromBuffer,
+  writeResponseFromBufferMulti,
+  writeResponseFromStream,
+} from "./httpResponse"
 import { responseFromScrapeResult } from "./responsePolicy"
 
 // General forward proxy with browser-backed challenge escalation. HTTPS is
@@ -574,106 +580,6 @@ async function handlePlainHttp(clientSocket: net.Socket, first: Buffer, opts: Mi
   })
 }
 
-function writeResponse(sock: net.Socket, status: number, body: Buffer, contentType = "text/html; charset=utf-8"): void {
-  const head =
-    `HTTP/1.1 ${status} ${reason(status)}\r\n` +
-    `Content-Type: ${contentType}\r\n` +
-    `Content-Length: ${body.length}\r\n` +
-    "Connection: close\r\n\r\n"
-  sock.write(head)
-  sock.write(body)
-  sock.end()
-}
-
-// Buffered responses preserve end-to-end headers and derive a fresh body length.
-function writeResponseFromBuffer(
-  sock: net.Socket,
-  status: number,
-  upstreamHeaders: Record<string, string>,
-  body: Buffer,
-  fallbackContentType: string,
-): void {
-  const ct = upstreamHeaders["content-type"] ?? fallbackContentType
-  const headerLines: string[] = [`HTTP/1.1 ${status} ${reason(status)}`]
-  let emittedContentType = false
-  for (const [name, value] of Object.entries(upstreamHeaders)) {
-    const lower = name.toLowerCase()
-    if (RESPONSE_HOP_BY_HOP_HEADERS.has(lower)) continue
-    if (lower === "content-length") continue
-    if (lower === "content-type") emittedContentType = true
-    headerLines.push(`${name}: ${value}`)
-  }
-  if (!emittedContentType) headerLines.push(`Content-Type: ${ct}`)
-  headerLines.push(`Content-Length: ${body.length}`)
-  headerLines.push("Connection: close")
-  sock.write(`${headerLines.join("\r\n")}\r\n\r\n`)
-  sock.write(body)
-  sock.end()
-}
-
-// Variant supporting array-valued headers (e.g. multiple Set-Cookie).
-// Each array value emits its own header line, per RFC 7230 §3.2.2.
-function writeResponseFromBufferMulti(
-  sock: net.Socket,
-  status: number,
-  upstreamHeaders: Record<string, string[]>,
-  body: Buffer,
-  fallbackContentType: string,
-): void {
-  const ct = upstreamHeaders["content-type"]?.[0] ?? fallbackContentType
-  const headerLines: string[] = [`HTTP/1.1 ${status} ${reason(status)}`]
-  let emittedContentType = false
-  for (const [name, values] of Object.entries(upstreamHeaders)) {
-    const lower = name.toLowerCase()
-    if (RESPONSE_HOP_BY_HOP_HEADERS.has(lower)) continue
-    if (lower === "content-length") continue
-    if (lower === "content-type") emittedContentType = true
-    for (const v of values) {
-      headerLines.push(`${name}: ${v}`)
-    }
-  }
-  if (!emittedContentType) headerLines.push(`Content-Type: ${ct}`)
-  headerLines.push(`Content-Length: ${body.length}`)
-  headerLines.push("Connection: close")
-  sock.write(`${headerLines.join("\r\n")}\r\n\r\n`)
-  sock.write(body)
-  sock.end()
-}
-
-// Streamed responses retain upstream transfer framing.
-function writeResponseFromStream(
-  sock: net.Socket,
-  status: number,
-  upstreamHeaders: Record<string, string>,
-  upstreamSocket: net.Socket,
-  fallbackContentType: string,
-  requestBodyLength: number,
-  prefix?: Buffer,
-): void {
-  const headerLines: string[] = [`HTTP/1.1 ${status} ${reason(status)}`]
-  let emittedContentType = false
-  for (const [name, value] of Object.entries(upstreamHeaders)) {
-    const lower = name.toLowerCase()
-    // The streamed bytes retain upstream HTTP/1.1 chunk framing, so preserve
-    // Transfer-Encoding. Other hop-by-hop headers remain connection-local.
-    if (RESPONSE_HOP_BY_HOP_HEADERS.has(lower) && lower !== "transfer-encoding") continue
-    if (lower === "content-type") emittedContentType = true
-    headerLines.push(`${name}: ${value}`)
-  }
-  if (!emittedContentType) headerLines.push(`Content-Type: ${fallbackContentType}`)
-  if (requestBodyLength > 0) headerLines.push(`X-Forwarded-Body-Length: ${requestBodyLength}`)
-  headerLines.push("Connection: close")
-  // Write HTTP headers first, then prefix body bytes (which arrived in the same
-  // TCP segment as upstream's response headers), then pipe the rest of the body.
-  sock.write(`${headerLines.join("\r\n")}\r\n\r\n`)
-  if (prefix?.length) sock.write(prefix)
-  upstreamSocket.pipe(sock)
-  sock.on("error", () => upstreamSocket.destroy())
-  upstreamSocket.on("error", () => sock.destroy())
-  upstreamSocket.on("end", () => sock.end())
-  upstreamSocket.on("close", () => sock.end())
-}
-
 function parseHeaders(lines: string[]): Record<string, string> {
   const out: Record<string, string> = {}
   for (const line of lines) {
@@ -681,15 +587,4 @@ function parseHeaders(lines: string[]): Record<string, string> {
     if (idx > 0) out[line.slice(0, idx).trim().toLowerCase()] = line.slice(idx + 1).trim()
   }
   return out
-}
-
-function reason(status: number): string {
-  const map: Record<number, string> = {
-    200: "OK",
-    403: "Forbidden",
-    404: "Not Found",
-    500: "Internal Server Error",
-    502: "Bad Gateway",
-  }
-  return map[status] ?? "OK"
 }

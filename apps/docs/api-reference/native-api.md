@@ -31,13 +31,13 @@ interface ScrapeRequest {
 | `maxTier`    | 1–4     | 4        | Never escalate beyond this tier                                                                                                                                                                |
 | `sessionId`  | string  | hostname | Override the Redis session key                                                                                                                                                                 |
 | `headers`    | object  | —        | Custom headers forwarded to the target across all tiers — see [Custom Headers](/api-reference/custom-headers)                                                                                  |
-| `proxy`      | string  | —        | Proxy URL used for this request's Tier 3/4 attempts instead of the configured `PROXY_URL`/`RESIDENTIAL_PROXY_URL` pool — see [Configuration § Proxies](/getting-started/configuration#proxies) |
+| `proxy`      | string  | —        | Strict proxy route for this request. HTTP(S) proxies are used by Tier 1 and browser tiers; SOCKS proxies skip Tier 1. Direct Tier 1 and the unproxied Tier 2 cache are never used — see [Configuration § Proxies](/getting-started/configuration#proxies) |
 
 ## Response
 
 ```typescript
 interface ScrapeResult {
-  url: string
+  url: string                  // final URL after redirects
   html: string
   cookies: Cookie[]
   userAgent: string

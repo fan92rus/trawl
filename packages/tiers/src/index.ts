@@ -1,4 +1,4 @@
-export type { OrchestratorDeps } from "./orchestrator"
+export type { AcquireOptions, OrchestratorDeps } from "./orchestrator"
 export { ScrapeError, scrape } from "./orchestrator"
 export { type SolveResult, solvePageCaptchas } from "./solvers"
 export { runTier1, type Tier1Result } from "./tiers/1"
@@ -8,8 +8,16 @@ export { runTier4, type Tier4Result } from "./tiers/4"
 export { decodeCp1251, encodeCp1251 } from "./utils/cp1251"
 export {
   type ChallengeType,
+  type DataDomeAction,
   detectChallengeType,
+  getAwsWafAction,
+  getDataDomeAction,
   hasAkamaiChallenge,
+  hasAwsWafCaptcha,
+  hasAwsWafChallenge,
+  hasDataDomeCaptcha,
+  hasDataDomeChallenge,
+  hasDdosGuardChallenge,
   hasHcaptcha,
   hasImpervaChallenge,
   hasRecaptcha,

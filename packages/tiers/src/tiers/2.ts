@@ -2,14 +2,23 @@ import type { BrowserHandle } from "@trawl/browser"
 import type { Cookie, SessionData, TierResult } from "@trawl/types"
 import { solvePageCaptchas } from "../solvers"
 import { normalizeSameSite, toCookies } from "../utils/cookies"
-import { hasAkamaiChallenge, isBlocked, isBrowserErrorPage, isCloudflarePage } from "../utils/detect"
+import {
+  hasAkamaiChallenge,
+  hasDataDomeChallenge,
+  isBlocked,
+  isBrowserErrorPage,
+  isCloudflarePage,
+} from "../utils/detect"
 import { normalizeHtml } from "../utils/html"
-import { captureResponse, isTextContentType, type MinimalResponse } from "../utils/response"
+import { trackMainDocumentResponses } from "../utils/mainResponse"
+import { captureResponse, isTextContentType } from "../utils/response"
 import type { RouteLike } from "../utils/sanitize"
 import { routeContinueOverrides } from "../utils/sanitize"
 
 export interface Tier2Result extends TierResult {
   tier: 2
+  challenge?: "datadome"
+  effectiveUrl?: string
   html?: string
   body?: Uint8Array
   responseHeaders?: Record<string, string>
@@ -63,14 +72,7 @@ export async function runTier2(
       })
     }
 
-    let statusCode = 200
-    const mainResponseHolder: { value?: MinimalResponse } = {}
-    page.on("response", (res: MinimalResponse) => {
-      if (res.url() === url) {
-        statusCode = res.status()
-        if (!mainResponseHolder.value) mainResponseHolder.value = res
-      }
-    })
+    const mainResponse = trackMainDocumentResponses(page)
 
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: maxTimeout })
     await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => {})
@@ -86,7 +88,7 @@ export async function runTier2(
       }
     }
 
-    if (isCloudflarePage(html, {})) {
+    if (isCloudflarePage(html, mainResponse.headers)) {
       return { tier: 2, status: "blocked", durationMs: Date.now() - start, reason: "session-expired" }
     }
 
@@ -96,8 +98,20 @@ export async function runTier2(
       return { tier: 2, status: "blocked", durationMs: Date.now() - start, reason: "akamai-session-expired" }
     }
 
-    if (isBlocked(statusCode, html)) {
-      return { tier: 2, status: "blocked", durationMs: Date.now() - start, reason: `http-${statusCode}` }
+    // Same reasoning for DataDome: isBlocked() already catches the 403, but a stale
+    // `datadome` cookie is worth telling apart from any other 403 in the logs.
+    if (hasDataDomeChallenge(html)) {
+      return {
+        tier: 2,
+        status: "blocked",
+        durationMs: Date.now() - start,
+        reason: "datadome-session-expired",
+        challenge: "datadome",
+      }
+    }
+
+    if (isBlocked(mainResponse.status, html)) {
+      return { tier: 2, status: "blocked", durationMs: Date.now() - start, reason: `http-${mainResponse.status}` }
     }
 
     // Attempt to solve any embedded captcha widgets (Turnstile, reCAPTCHA, hCaptcha).
@@ -109,20 +123,26 @@ export async function runTier2(
       captchasSolved = result.solved
     }
 
+    const finalHtml = await page.content()
+    if (isCloudflarePage(finalHtml, mainResponse.headers)) {
+      return { tier: 2, status: "blocked", durationMs: Date.now() - start, reason: "session-expired" }
+    }
+
     const cookies: Cookie[] = toCookies(await activeContext.cookies())
 
-    const captured = await captureResponse(mainResponseHolder.value)
+    const captured = await captureResponse(mainResponse.response)
 
     return {
       tier: 2,
       status: "success",
       durationMs: Date.now() - start,
+      effectiveUrl: page.url(),
       // For HTML/text content-types, `html` is the rendered DOM. For binary, leave
       // empty so /scrape consumers know to use `body`/`contentType`.
-      html: !captured.contentType || isTextContentType(captured.contentType) ? normalizeHtml(html) : "",
+      html: !captured.contentType || isTextContentType(captured.contentType) ? normalizeHtml(finalHtml) : "",
       ...captured,
       cookies,
-      statusCode,
+      statusCode: mainResponse.status,
       captchasSolved: captchasSolved.length > 0 ? captchasSolved : undefined,
     }
   } catch (err) {

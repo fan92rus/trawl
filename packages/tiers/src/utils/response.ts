@@ -2,6 +2,7 @@ export interface MinimalResponse {
   url(): string
   status(): number
   headers(): Record<string, string>
+  allHeaders(): Promise<Record<string, string>>
   body(): Promise<Buffer | Uint8Array>
 }
 
@@ -22,7 +23,7 @@ export const captureResponse = async (response?: MinimalResponse): Promise<Captu
   if (!response) return {}
   try {
     const raw = await response.body()
-    const responseHeaders = response.headers()
+    const responseHeaders = await response.allHeaders()
     return {
       body: raw instanceof Uint8Array ? raw : new Uint8Array(raw),
       responseHeaders,

@@ -33,24 +33,25 @@ console.log(`[api] TRAWL starting on :${PORT}  (pool: ${POOL_SIZE} browser${POOL
 
 const state: { proxyHandle?: MitmProxyHandle } = {}
 
-initPool()
-  .then(() => {
-    if (MITM_PROXY_ENABLED) {
-      state.proxyHandle = startMitmProxy({
-        port: MITM_PROXY_PORT,
-        host: MITM_PROXY_HOST,
-        caDir: MITM_PROXY_CA_DIR,
-        deps: getDeps(),
-        maxTier: MITM_PROXY_MAX_TIER,
-        debug: MITM_PROXY_DEBUG,
-        cp1251Hosts: CP1251_HOSTS,
-      })
-    }
+const poolReady = initPool()
+
+// Tier 0 does not need a browser, and browser-backed requests already have a
+// bounded acquire queue. Start accepting proxy traffic while the pool warms.
+if (MITM_PROXY_ENABLED) {
+  state.proxyHandle = startMitmProxy({
+    port: MITM_PROXY_PORT,
+    host: MITM_PROXY_HOST,
+    caDir: MITM_PROXY_CA_DIR,
+    deps: getDeps(),
+    maxTier: MITM_PROXY_MAX_TIER,
+    debug: MITM_PROXY_DEBUG,
   })
-  .catch((err) => {
-    console.error("[api] startup failed:", err)
-    process.exit(1)
-  })
+}
+
+poolReady.catch((err) => {
+  console.error("[api] startup failed:", err)
+  process.exit(1)
+})
 
 registerLifecycleHandlers({
   onShutdown: async () => {

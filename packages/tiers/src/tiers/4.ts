@@ -1,27 +1,30 @@
 import type { BrowserHandle } from "@trawl/browser"
-import { FINGERPRINT, newFreshContext } from "@trawl/browser"
+import { closeTemporaryContext, FINGERPRINT, newFreshContext } from "@trawl/browser"
 import type { Cookie, TierResult } from "@trawl/types"
 import { solvePageCaptchas } from "../solvers"
-import { waitForAkamaiResolution } from "../utils/akamaiWait"
-import { waitForChallengeResolution } from "../utils/challengeWait"
-import { normalizeSameSite, toCookies } from "../utils/cookies"
+import { routeChallengeWait } from "../utils/challengeRouter"
+import { normalizeSameSite, snapshotChallengeCookies, toCookies } from "../utils/cookies"
 import {
-  detectChallengeType,
   hasAkamaiChallenge,
+  hasDataDomeChallenge,
+  hasDdosGuardChallenge,
   hasImpervaChallenge,
   isBlocked,
   isBrowserErrorPage,
   isCloudflarePage,
 } from "../utils/detect"
 import { normalizeHtml } from "../utils/html"
-import { waitForImpervaResolution } from "../utils/impervaWait"
+import { trackMainDocumentResponses } from "../utils/mainResponse"
 import { isHardNetworkFailure } from "../utils/network"
-import { captureResponse, isTextContentType, type MinimalResponse } from "../utils/response"
+import { isProxyTransportFailure, normalizeProxyError, proxyResponseFailure } from "../utils/proxyFailure"
+import { captureResponse, isTextContentType } from "../utils/response"
 import type { RouteLike } from "../utils/sanitize"
 import { routeContinueOverrides } from "../utils/sanitize"
 
 export interface Tier4Result extends TierResult {
   tier: 4
+  challenge?: "datadome"
+  effectiveUrl?: string
   html?: string
   body?: Uint8Array
   responseHeaders?: Record<string, string>
@@ -51,10 +54,15 @@ export async function runTier4(
   const state: { proxyContext?: Awaited<ReturnType<typeof newFreshContext>> } = {}
 
   try {
-    const proxyContext = await newFreshContext(handle.browser, { proxy: proxyUrl })
+    const proxyContext = await newFreshContext(handle.browser, {
+      proxy: proxyUrl,
+      onCreated: handle.noteTemporaryContext,
+      requestReplacement: handle.requestBrowserReplacement,
+    })
     state.proxyContext = proxyContext
 
     const page = await proxyContext.newPage()
+    const initialCookies = snapshotChallengeCookies(await proxyContext.cookies())
 
     // Inject auth/session cookies before navigation (same rationale as Tier 3).
     if (requestCookies && requestCookies.length > 0) {
@@ -78,16 +86,7 @@ export async function runTier4(
       })
     }
 
-    let statusCode = 200
-    const mainResponseHolder: { value?: MinimalResponse } = {}
-    page.on("response", (res: MinimalResponse) => {
-      try {
-        if (res.url() === url || res.url().startsWith(url.replace(/\/$/, ""))) {
-          statusCode = res.status()
-          if (!mainResponseHolder.value) mainResponseHolder.value = res
-        }
-      } catch {}
-    })
+    const mainResponse = trackMainDocumentResponses(page)
 
     const gotoErr = await page
       .goto(url, {
@@ -97,28 +96,37 @@ export async function runTier4(
       .catch((e: Error) => e)
 
     if (isHardNetworkFailure(gotoErr)) {
-      return { tier: 4, status: "error", durationMs: Date.now() - start, reason: gotoErr.message.split("\n")[0] }
+      return { tier: 4, status: "error", durationMs: Date.now() - start, reason: normalizeProxyError(gotoErr) }
+    }
+    const earlyProxyFailure = proxyResponseFailure(mainResponse.status, mainResponse.headers)
+    if (earlyProxyFailure) {
+      return { tier: 4, status: "error", durationMs: Date.now() - start, reason: earlyProxyFailure }
     }
 
     const remaining = maxTimeout - (Date.now() - start)
     const peekHtml = await page.content().catch(() => "")
-    const challengeType = detectChallengeType(peekHtml)
-    const resolution =
-      challengeType === "imperva"
-        ? await waitForImpervaResolution(page, remaining, url)
-        : challengeType === "akamai"
-          ? await waitForAkamaiResolution(page, remaining, url)
-          : await waitForChallengeResolution(page, remaining, url)
+    const { challengeType, resolution } = await routeChallengeWait(
+      page,
+      peekHtml,
+      mainResponse.headers,
+      remaining,
+      url,
+      undefined,
+      mainResponse.status,
+      initialCookies,
+    )
 
     if (resolution !== "ok") {
       return {
         tier: 4,
-        status: resolution === "ip-blocked" ? "blocked" : "timeout",
+        status: resolution === "ip-blocked" || resolution === "captcha-required" ? "blocked" : "timeout",
         durationMs: Date.now() - start,
         reason:
-          resolution === "ip-blocked"
-            ? "proxy-ip-blocked"
-            : `${challengeType === "none" ? "cloudflare" : challengeType}-challenge-timeout`,
+          resolution === "captcha-required"
+            ? `${challengeType}-captcha-required`
+            : resolution === "ip-blocked"
+              ? "proxy-ip-blocked"
+              : `${challengeType === "none" ? "cloudflare" : challengeType}-challenge-timeout`,
       }
     }
 
@@ -144,11 +152,11 @@ export async function runTier4(
         tier: 4,
         status: "error",
         durationMs: Date.now() - start,
-        reason: "browser network error (about:neterror)",
+        reason: "proxy-connection-failed",
       }
     }
 
-    if (isCloudflarePage(html, {})) {
+    if (isCloudflarePage(html, mainResponse.headers)) {
       return {
         tier: 4,
         status: "blocked",
@@ -175,23 +183,44 @@ export async function runTier4(
       }
     }
 
-    if (isBlocked(statusCode, html)) {
-      return { tier: 4, status: "blocked", durationMs: Date.now() - start, reason: `http-${statusCode}` }
+    if (hasDdosGuardChallenge(html)) {
+      const pageTitle = await page.title().catch(() => "?")
+      const pageUrl = page.url()
+      console.log(`[tier4] ddos-guard-persistent: url="${pageUrl}" title="${pageTitle}" html=${html.length}b`)
+      return { tier: 4, status: "blocked", durationMs: Date.now() - start, reason: "ddos-guard-persistent" }
+    }
+
+    if (hasDataDomeChallenge(html)) {
+      const pageTitle = await page.title().catch(() => "?")
+      const pageUrl = page.url()
+      console.log(`[tier4] datadome-persistent: url="${pageUrl}" title="${pageTitle}" html=${html.length}b`)
+      return {
+        tier: 4,
+        status: "blocked",
+        durationMs: Date.now() - start,
+        reason: "datadome-persistent",
+        challenge: "datadome",
+      }
+    }
+
+    if (isBlocked(mainResponse.status, html)) {
+      return { tier: 4, status: "blocked", durationMs: Date.now() - start, reason: `http-${mainResponse.status}` }
     }
 
     const cookies: Cookie[] = toCookies(await proxyContext.cookies())
 
-    const captured = await captureResponse(mainResponseHolder.value)
+    const captured = await captureResponse(mainResponse.response)
 
     return {
       tier: 4,
       status: "success",
       durationMs: Date.now() - start,
+      effectiveUrl: page.url(),
       html: !captured.contentType || isTextContentType(captured.contentType) ? normalizeHtml(html) : "",
       ...captured,
       cookies,
       userAgent: await page.evaluate(() => navigator.userAgent).catch(() => FINGERPRINT.userAgent),
-      statusCode,
+      statusCode: mainResponse.status,
       captchasSolved: captchasSolved.length > 0 ? captchasSolved : undefined,
     }
   } catch (err) {
@@ -199,14 +228,13 @@ export async function runTier4(
       tier: 4,
       status: "error",
       durationMs: Date.now() - start,
-      reason: err instanceof Error ? err.message : String(err),
+      reason: isProxyTransportFailure(err)
+        ? normalizeProxyError(err)
+        : err instanceof Error
+          ? err.message
+          : String(err),
     }
   } finally {
-    // Same timeout-bounded close as tier3 — see comment there.
-    if (state.proxyContext) {
-      await Promise.race([state.proxyContext.close(), new Promise<void>((resolve) => setTimeout(resolve, 5000))]).catch(
-        () => {},
-      )
-    }
+    await closeTemporaryContext(state.proxyContext, handle.requestBrowserReplacement, "tier4 context cleanup timed out")
   }
 }

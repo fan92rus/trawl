@@ -61,9 +61,9 @@ When `acquireTimeoutMs` elapses, the API surfaces the rejection as **HTTP 429** 
 Tier 3 and Tier 4 create short-lived isolated contexts for fresh challenge solves and proxy escalation. Those contexts are closed by the tier code, but long-running Firefox/Camoufox processes can still retain child content processes after repeated solves. Two complementary defenses bound this growth:
 
 1. **`contentProcesses` (default `2`)** caps Firefox content processes per browser at launch via the `dom.ipc.processCount` Firefox pref. This is the primary defense — bounds thread/RAM growth at the source regardless of context churn.
-2. **`recycleAfterTemporaryContexts` (default `8`)** is now **recycle-on-suspect**: the orchestrator only flags a browser for recycle when Tier 3/Tier 4 returns `blocked` / `needs-js`. Successful solves preserve cookies, `cf_clearance`, and warm fingerprint state. Set `BROWSER_RECYCLE_AFTER_CONTEXTS=0` to disable this recycling.
+2. **`recycleAfterTemporaryContexts` (default `8`)** counts every Tier 3/Tier 4 context creation, including successful, timed-out, errored, and blocked attempts. At the threshold the pool warms a replacement while the current browser remains available, swaps it in when idle, and then closes the retired browser. Only one replacement is warmed across the pool at a time, so the brief memory peak is bounded to one additional browser. Set `BROWSER_RECYCLE_AFTER_CONTEXTS=0` to disable this recycling.
 
-See issue #13 (original bug), #17 (recycle-on-suspect trade-off discussion), and the [configuration docs](/getting-started/configuration#browser_recycle_after_contexts) for tuning.
+See issues #13, #17, and #52, plus the [configuration docs](/getting-started/configuration#browser_recycle_after_contexts) for tuning.
 
 ## Self-healing
 

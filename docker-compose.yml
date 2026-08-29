@@ -1,8 +1,14 @@
 services:
   redis:
-    image: redis:8.8-alpine
+    image: redis:8.8.1-alpine
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 1s
+      retries: 10
+      start_period: 2s
 
   trawl:
     image: ghcr.io/germondai/trawl:latest
@@ -17,6 +23,7 @@ services:
     environment:
       REDIS_URL: redis://redis:6379
       BROWSER_POOL_SIZE: ${BROWSER_POOL_SIZE:-1}
+      BROWSER_HEADFUL_POOL_SIZE: ${BROWSER_HEADFUL_POOL_SIZE:-0}
       PROXY_URL: ${PROXY_URL:-}
       PROXY_LIST_FILE: ${PROXY_LIST_FILE:-}
       RESIDENTIAL_PROXY_URL: ${RESIDENTIAL_PROXY_URL:-}
@@ -32,7 +39,8 @@ services:
       # Persist the proxy's CA so clients don't need to re-install on every restart.
       - trawl_proxy_ca:${MITM_PROXY_CA_DIR:-/data/proxy-ca}
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8191/health"]
       interval: 30s

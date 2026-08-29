@@ -61,40 +61,38 @@ Much faster and more reliable FlareSolverr & Byparr alternative and drop-in repl
   <table>
     <tr>
       <td width="30%" align="center" valign="middle">
-        <a href="https://go.nodemaven.com/germondaiGitHub" target="_blank">
-          <img width="720" height="300" alt="nodemaven" src="https://github.com/user-attachments/assets/5dbfaee7-7863-4a20-a4a0-eb9f7bf0a90a" />
+        <a href="https://get.brightdata.com/trawl" target="_blank">
+          <img width="1254" height="1254" alt="Birght Data" src="https://github.com/user-attachments/assets/f23cfc4a-160d-4576-b27f-5d5bb4738530" />
         </a>
       </td>
       <td valign="middle">
-        <b><a href="https://go.nodemaven.com/germondaiGitHub" target="_blank">NodeMaven</a></b> - The most reliable proxy provider with the Highest Quality IP on the market. Best solution for automation, web scraping, SEO research, and social media management.<br><br>
-        <b>Why <a href="https://go.nodemaven.com/germondaiGitHub" target="_blank">NodeMaven</a>?</b><br>
-        • 99.9% uptime<br>
-        • Sticky sessions up to 7 days<br>
-        • IP filtering: all proxies have fraud score <97%<br>
-        • No KYC required<br>
-        • Cashback on traffic - burn GB and earn up to 10% back<br><br>
-        <b>Special codes for <a href="https://trawl.germondai.com" target="_blank">TRAWL</a> users:</b><br>
-        • TRAWL35 - 35% off to Mobile and Residential Proxies<br>
-        • TRAWL40 - 40% off to ISP (Static) Proxies
+        <b><a href="https://get.brightdata.com/trawl" target="_blank">Bright Data</a></b> - The most powerful platform for Web Unlocker, SERP API and web scraping tools.<br><br>
+        <b>Why <a href="https://get.brightdata.com/trawl" target="_blank">Bright Data</a>?</b><br>
+        • <a href="https://get.brightdata.com/trawl-web-unlocker" target="_blank">Web Unlocker</a> - bypass any anti-bot protection<br>
+        • <a href="https://get.brightdata.com/trawl-serp-api" target="_blank">SERP API</a> - real-time Google, Bing & more results<br>
+        • Scraping Browser & dedicated scrapers<br>
+        • Massive residential proxy network<br>
+        • Built for scale and reliability<br><br>
+        <b>Get started for free with <a href="https://get.brightdata.com/trawl" target="_blank">Bright Data</a>!</b>
       </td>
     </tr>
     <tr>
       <td width="30%" align="center" valign="middle">
-        <a href="https://www.swiftproxy.net/?code=ICOTZM44K" target="_blank">
-          <img width="240" height="100" alt="swiftproxy" src="https://github.com/user-attachments/assets/d7112814-182b-46b9-b359-cf48ca69d4cc" />
+        <a href="https://go.nodemaven.com/germondaireadme" target="_blank">
+          <img width="760" height="280" alt="nodemaven" src="https://github.com/user-attachments/assets/5fe3b231-b712-42d1-bc70-23c934f1a0ef" />
         </a>
       </td>
       <td valign="middle">
-        <b><a href="https://www.swiftproxy.net/?code=ICOTZM44K" target="_blank">Swiftproxy</a></b> - A global residential proxy provider offering 80M+ real residential IPs across 190+ countries and regions. Built for web scraping, browser automation, AI workflows, SEO monitoring, and multi-account management.<br><br>
-        <b>Why <a href="https://www.swiftproxy.net/?code=ICOTZM44K" target="_blank">Swiftproxy</a>?</b><br>
-        • Non-expiring residential traffic<br>
-        • Rotating & sticky sessions<br>
-        • HTTP, HTTPS & SOCKS5 support<br>
-        • Country, state & city-level targeting<br>
-        • 24/7 technical support<br><br>
-        <b>Exclusive offer for <a href="https://trawl.germondai.com" target="_blank">TRAWL</a> users:</b><br>
-        • PROXY90 - Get 10% OFF all proxy plans<br>
-        • Free Trial Available
+        <b><a href="https://go.nodemaven.com/germondaireadme" target="_blank">NodeMaven</a></b> - The most efficient proxy provider for Web Scrapping and Automation with the Highest Quality IP on the market.<br><br>
+        <b>Why <a href="https://go.nodemaven.com/germondaireadme" target="_blank">NodeMaven</a>?</b><br>
+        • ZIP targeting<br>
+        • 99.9% uptime<br>
+        • IP filtering: all proxies have fraud score <97%<br>
+        • No KYC required<br>
+        • Unique free tools: Proxy Bandwidth Checker, Meta Tag Checker, IP Lookup and others!<br><br>
+        <b>Special codes for <a href="https://trawl.germondai.com" target="_blank">TRAWL</a> users:</b><br>
+        • TRAWL35 - 35% off to Mobile and Residential Proxies<br>
+        • TRAWL40 - 40% off to ISP (Static) Proxies
       </td>
     </tr>
   </table>
@@ -357,8 +355,8 @@ Tier 4: Residential proxy ──── success ──→ cache + return (15–45
 
 | Image tag                          | Built from                     | Runtime                       | Use case                                                   |
 | ---------------------------------- | ------------------------------ | ----------------------------- | ---------------------------------------------------------- |
-| `ghcr.io/germondai/trawl:latest`   | `apps/api/Dockerfile`          | Bun 1.3.14 (modern, AVX2)     | Default — modern Linux amd64/arm64                         |
-| `ghcr.io/germondai/trawl:baseline` | `apps/api/Dockerfile.baseline` | Bun 1.3.14 baseline (no AVX2) | Older CPUs / older kernels (Synology NAS, J4125, Atom-era) |
+| `ghcr.io/germondai/trawl:latest`   | `apps/api/Dockerfile`          | Bun 1.4.0 (modern, AVX2)     | Default — modern Linux amd64/arm64                         |
+| `ghcr.io/germondai/trawl:baseline` | `apps/api/Dockerfile.baseline` | Bun 1.4.0 baseline (no AVX2) | Older CPUs / older kernels (Synology NAS, J4125, Atom-era) |
 
 Both tags live on the same `ghcr.io/germondai/trawl` package — they share the registry but use different Dockerfile sources. Pick whichever tag fits your hardware:
 
@@ -370,7 +368,7 @@ image: ghcr.io/germondai/trawl:latest
 image: ghcr.io/germondai/trawl:baseline
 ```
 
-Synology note: many Synology NAS units (DSM 7.x on J4125 / older hardware) ship kernel 4.4.x, which Bun's modern runtime can't fully handle. Standard Bun requires kernel 5.1+ (5.6+ recommended); the baseline build degrades gracefully down to kernel 3.10. The `:baseline` tag is published for that case — **confirmed working** on a Synology DS920+ (Celeron J4125, DSM 7.3.2, kernel 4.4.302): the container starts cleanly, `/health` reports healthy, and it solves live Cloudflare challenges via `/v1` (see [#1](https://github.com/germondai/trawl/issues/1)). Published by independent GitHub Actions workflows (`.github/workflows/publish.yml`, `publish-baseline.yml`); tag-triggered releases push matching git tags (e.g. `v1.0.0` → `1.0.0`, `1.0.0-baseline` → `1.0.0-baseline`) and manual `workflow_dispatch` from `main` updates the rolling tag (`latest` and `baseline` respectively).
+Synology note: many Synology NAS units (DSM 7.x on J4125 / older hardware) ship kernel 4.4.x, which Bun's modern runtime can't fully handle. Standard Bun requires kernel 5.1+ (5.6+ recommended); the baseline build degrades gracefully down to kernel 3.10. The `:baseline` tag is published for that case — **confirmed working** on a Synology DS920+ (Celeron J4125, DSM 7.3.2, kernel 4.4.302): the container starts cleanly, `/health` reports healthy, and it solves live Cloudflare challenges via `/v1` (see [#1](https://github.com/germondai/trawl/issues/1)). Published by independent GitHub Actions workflows: pushing `v1.4.2` creates `:1.4.2`, `:latest`, `:1.4.2-baseline`, and `:baseline`; pushing `main` creates `:nightly` and `:nightly-<sha>`.
 
 ## Releases & versioning
 
@@ -416,7 +414,7 @@ for pool and mounted-file examples.
 | -------------------------------- | ------------------------ | ----------------------------------------------------------------------------------- |
 | `BROWSER_POOL_SIZE`              | `3`                      | Warm Camoufox Firefox instances                                                     |
 | `BROWSER_ACQUIRE_TIMEOUT_MS`     | `15000`                  | How long `acquire()` polls for a free browser before HTTP 429 is returned           |
-| `BROWSER_RECYCLE_AFTER_CONTEXTS` | `8`                      | Recycle a browser after this many `blocked`/`needs-js` outcomes; set `0` to disable |
+| `BROWSER_RECYCLE_AFTER_CONTEXTS` | `8`                      | Rolling-replace after this many Tier 3/4 contexts; set `0` to disable               |
 | `BROWSER_CONTENT_PROCESSES`      | `2`                      | Cap Firefox content processes per browser (`dom.ipc.processCount`); lowers RAM/CPU  |
 | `SESSION_TTL_SECONDS`            | `3600`                   | Redis session cache TTL (seconds)                                                   |
 | `REDIS_URL`                      | `redis://localhost:6379` | Redis connection string                                                             |

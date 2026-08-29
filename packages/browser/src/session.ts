@@ -10,6 +10,23 @@ export class SessionCache {
     this.ttl = ttlSeconds
   }
 
+  async connect(timeoutMs = 1_000): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        this.redis.connect(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`Redis connection timed out after ${timeoutMs}ms`)), timeoutMs)
+        }),
+      ])
+    } catch (error) {
+      this.redis.close()
+      throw error
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
   private key(domain: string): string {
     return `session:${domain}`
   }

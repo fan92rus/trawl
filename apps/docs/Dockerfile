@@ -1,4 +1,4 @@
-FROM oven/bun:1.3.14-alpine AS builder
+FROM oven/bun:1.4.0-alpine AS builder
 
 # git is required by VitePress lastUpdated (reads commit timestamps)
 RUN apk add --no-cache git

@@ -51,6 +51,7 @@ describe("runTier2", () => {
     let userAgent: Record<string, string> | undefined
     let pageClosed = false
     const page = {
+      url: () => "https://example.com/final?ok=1",
       setExtraHTTPHeaders: async (headers: Record<string, string>) => {
         userAgent = headers
       },
@@ -74,6 +75,7 @@ describe("runTier2", () => {
 
     expect(result.status).toBe("success")
     expect(result.html).toContain("pool context content")
+    expect(result.effectiveUrl).toBe("https://example.com/final?ok=1")
     expect(injectedCookies).toEqual(session.cookies)
     expect(userAgent).toEqual({ "User-Agent": session.userAgent })
     expect(pageClosed).toBe(true)

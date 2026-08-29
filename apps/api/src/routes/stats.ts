@@ -1,9 +1,13 @@
+import type { PoolStats } from "@trawl/types"
 import { Elysia } from "elysia"
-import { getPool } from "../deps"
+import { getHeadfulPool, getPool } from "../deps"
 
-export function statsRoute() {
+export function statsRoute(
+  getMainStats = (): PoolStats | undefined => getPool()?.getStats(),
+  getHeadfulStats = (): PoolStats | undefined => getHeadfulPool()?.getStats(),
+) {
   return new Elysia().get("/stats", () => {
-    const stats = getPool()?.getStats() ?? {
+    const stats = getMainStats() ?? {
       total: 0,
       busy: 0,
       available: 0,
@@ -13,6 +17,8 @@ export function statsRoute() {
       live: 0,
       queueDepth: 0,
     }
+    // `null` means the optional pool is disabled.
+    const headful = getHeadfulStats()
     return {
       browsers: stats.total,
       available: stats.available,
@@ -21,6 +27,16 @@ export function statsRoute() {
       live: stats.live,
       restarts: stats.restarts,
       queueDepth: stats.queueDepth,
+      headful: headful
+        ? {
+            browsers: headful.total,
+            available: headful.available,
+            busy: headful.busy,
+            stalled: headful.stalled,
+            live: headful.live,
+            restarts: headful.restarts,
+          }
+        : null,
     }
   })
 }
