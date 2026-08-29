@@ -26,6 +26,9 @@ jobs:
         run: |
           git config --global http.https://gitea.local.curloptResolve "gitea.local:443:192.168.1.96"
           git config --global --add safe.directory "$(pwd)"
+          # git merge needs a committer identity — the ci-runner image has none set
+          git config --global user.name "fan92rus"
+          git config --global user.email "fan92rus@users.noreply.gitea.local"
           # Full clone (repo is ~1MB) — shallow clone breaks merge-base counting
           git clone --branch=dev "https://gitea:$GITEA_TOKEN@gitea.local/fan92rus/Trawl.git" .
           git remote add upstream https://github.com/germondai/trawl.git
