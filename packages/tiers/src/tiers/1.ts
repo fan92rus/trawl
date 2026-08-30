@@ -14,6 +14,7 @@ import {
   isCloudflarePage,
 } from "../utils/detect"
 import { normalizeHtml } from "../utils/html"
+import { decodeTextBody } from "../utils/charset"
 import { normalizeProxyError, proxyResponseFailure } from "../utils/proxyFailure"
 import { isTextContentType } from "../utils/response"
 
@@ -264,10 +265,12 @@ export async function runTier1(
       // content-types. Empty for binary payloads so /scrape consumers see the body
       // is binary via the contentType field. `previewText` is bounded to 4 KiB for
       // challenge detection and must not be used as the response body — decode the
-      // full buffer, reusing the preview only when it already covers the whole body.
+      // full buffer with charset sniffing (BOM → header → meta), since legacy
+      // charsets (windows-1251 runet trackers, windows-1252/latin1 western sites)
+      // decoded as UTF-8 would be irrecoverable mojibake for /v1 consumers.
       html: isTextContentType(contentType)
         ? normalizeHtml(
-            rawBytes.length > previewLen ? new TextDecoder("utf-8", { fatal: false }).decode(rawBytes) : previewText,
+            rawBytes.length > previewLen ? decodeTextBody(rawBytes, contentType) : decodeTextBody(rawBytes.subarray(0, previewLen), contentType),
           )
         : "",
       body: rawBytes,
