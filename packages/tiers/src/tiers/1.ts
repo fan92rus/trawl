@@ -1,5 +1,6 @@
 import { FINGERPRINT } from "@trawl/browser"
 import type { Cookie, TierResult } from "@trawl/types"
+import { decodeTextBody } from "../utils/charset"
 import type { ChallengeType } from "../utils/detect"
 import {
   getAwsWafAction,
@@ -14,7 +15,6 @@ import {
   isCloudflarePage,
 } from "../utils/detect"
 import { normalizeHtml } from "../utils/html"
-import { decodeTextBody } from "../utils/charset"
 import { normalizeProxyError, proxyResponseFailure } from "../utils/proxyFailure"
 import { isTextContentType } from "../utils/response"
 
@@ -270,7 +270,9 @@ export async function runTier1(
       // decoded as UTF-8 would be irrecoverable mojibake for /v1 consumers.
       html: isTextContentType(contentType)
         ? normalizeHtml(
-            rawBytes.length > previewLen ? decodeTextBody(rawBytes, contentType) : decodeTextBody(rawBytes.subarray(0, previewLen), contentType),
+            rawBytes.length > previewLen
+              ? decodeTextBody(rawBytes, contentType)
+              : decodeTextBody(rawBytes.subarray(0, previewLen), contentType),
           )
         : "",
       body: rawBytes,

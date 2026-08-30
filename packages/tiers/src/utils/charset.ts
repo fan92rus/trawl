@@ -71,7 +71,10 @@ export function charsetFromContentType(contentType?: string): string | null {
 }
 
 function normalizeCharset(raw: string): string {
-  const name = raw.trim().toLowerCase().replace(/^["']|["']$/g, "")
+  const name = raw
+    .trim()
+    .toLowerCase()
+    .replace(/^["']|["']$/g, "")
   switch (name) {
     case "utf8":
     case "utf-8":

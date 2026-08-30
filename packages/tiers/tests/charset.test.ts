@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { decodeTextBody, decodeWindows1252, sniffCharset, charsetFromContentType } from "../src/utils/charset"
+import { charsetFromContentType, decodeTextBody, decodeWindows1252, sniffCharset } from "../src/utils/charset"
 
 // 'Привет' in windows-1251: 0xCF 0xF0 0xE8 0xE2 0xE5 0xF2
 const CP1251_PRIVET = new Uint8Array([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2])
@@ -25,7 +25,12 @@ describe("charsetFromContentType", () => {
 
 describe("sniffCharset", () => {
   test("BOM wins over header and meta", () => {
-    const bom = new Uint8Array([0xef, 0xbb, 0xbf, ...Array.from(new TextEncoder().encode("<meta charset=windows-1251>"))])
+    const bom = new Uint8Array([
+      0xef,
+      0xbb,
+      0xbf,
+      ...Array.from(new TextEncoder().encode("<meta charset=windows-1251>")),
+    ])
     expect(sniffCharset(bom, "text/html; charset=windows-1251")).toBe("utf-8")
     const utf16 = new Uint8Array([0xff, 0xfe, 0x41, 0x00])
     expect(sniffCharset(utf16, "text/html")).toBe("utf-16le")
@@ -37,7 +42,9 @@ describe("sniffCharset", () => {
   })
 
   test("sniffs meta charset when header has none", () => {
-    const bytes = new TextEncoder().encode('<html><head><meta http-equiv="Content-Type" content="text/html; charset=windows-1251">')
+    const bytes = new TextEncoder().encode(
+      '<html><head><meta http-equiv="Content-Type" content="text/html; charset=windows-1251">',
+    )
     expect(sniffCharset(bytes, "text/html")).toBe("windows-1251")
     expect(sniffCharset(new TextEncoder().encode('<meta charset="windows-1251">'), undefined)).toBe("windows-1251")
   })
