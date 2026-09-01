@@ -91,3 +91,39 @@ describe("FlareSolverr request adapter", () => {
     expect(browserOverride.headers["Content-Type"]).toBe("application/x-www-form-urlencoded")
   })
 })
+
+// Prowlarr injects its global HTTP proxy into every FlareSolverr request. When
+// that proxy is TRAWL's own MITM listener, honoring it makes TRAWL scrape
+// through itself (challenge never resolves, "proxy-connection-failed"). The
+// adapter must drop a self-referencing proxy (MITM enabled + same port).
+describe("self-MITM proxy loop protection", () => {
+  test("drops a proxy pointing at the own MITM port", async () => {
+    process.env.MITM_PROXY_ENABLED = "1"
+    process.env.MITM_PROXY_PORT = "8192"
+    const mod = await import("./flaresolverr")
+
+    const result = mod.buildScrapeRequestFromFlareSolverr({
+      cmd: "request.get",
+      url: "https://prowlarr.servarr.com/v1/ping",
+      maxTimeout: 180_000,
+      proxy: { url: "http://trawl:8192" },
+    } as unknown as FlareSolverrRequest)
+
+    expect(result.proxy).toBeUndefined()
+  })
+
+  test("keeps a real external proxy", async () => {
+    process.env.MITM_PROXY_ENABLED = "1"
+    process.env.MITM_PROXY_PORT = "8192"
+    const mod = await import("./flaresolverr")
+
+    const result = mod.buildScrapeRequestFromFlareSolverr({
+      cmd: "request.get",
+      url: "https://example.com",
+      maxTimeout: 60_000,
+      proxy: { url: "http://residential.example:31280" },
+    } as FlareSolverrRequest)
+
+    expect(result.proxy).toBe("http://residential.example:31280")
+  })
+})
