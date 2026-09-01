@@ -27,6 +27,12 @@ export function v1Route({
       const req: FlareSolverrRequest = body
       const cmd = req.cmd ?? "request.get"
 
+      // Debug aid for proxy-integration issues (Prowlarr/ReLampa): one line per
+      // request with the fields that change downstream behaviour.
+      console.log(
+        `[v1] ${cmd} url=${req.url} proxy=${JSON.stringify(req.proxy ?? null)} ua=${req.headers?.["user-agent"] ?? "?"}`,
+      )
+
       if (cmd !== "request.get" && cmd !== "request.post") {
         set.status = 400
         return flareSolverrError(req.url, `Unknown cmd: ${cmd}`)
