@@ -139,6 +139,11 @@ COPY --from=oven/bun:1.4.0  /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=camoufox          /opt/camoufox      /opt/camoufox
 COPY --from=deps              /app/node_modules  /app/node_modules
 
+# Trust the Homeserver-CA root so @sentry/node can POST to https://glitchtip.local/*
+# (self-hosted, cert signed by Homeserver-CA). NODE_EXTRA_CA_CERTS is honoured by
+# Bun/Node and *appends* to the built-in CA bundle, so public TLS keeps working.
+COPY root_ca.crt /usr/local/share/ca-certificates/homeserver-root-ca.crt
+
 # Strip debug symbols — Bun is statically linked (safe to strip-all); Firefox's glibc/NSS
 # .so files keep their dynamic symbols via --strip-unneeded. Saves ~75 MB uncompressed
 # without affecting runtime behaviour. `|| true` so a strip failure on one file
@@ -162,6 +167,7 @@ ENV CAMOUFOX_INSTALL_DIR=/opt/camoufox \
     BUN_HTTP_KEEPALIVE=0 \
     BUN_AGENT_DISABLE=1 \
     BUN_INSPECT=0 \
+    NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/homeserver-root-ca.crt \
     BUN_LOCKFILE_MIGRATION=false \
     MIMALLOC_PURGE_DELAY=0 \
     NODE_NO_WARNINGS=1

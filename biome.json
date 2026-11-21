@@ -16,7 +16,8 @@
       "!**/cache",
       "!**/coverage",
       "!**/bun.lock",
-      "!**/tsconfig.tsbuildinfo"
+      "!**/tsconfig.tsbuildinfo",
+      "!root_ca.crt"
     ]
   },
   "formatter": {
