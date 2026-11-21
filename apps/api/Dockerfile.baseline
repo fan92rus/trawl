@@ -70,8 +70,8 @@ RUN --mount=type=secret,id=GITHUB_TOKEN,env=GITHUB_TOKEN \
     rm -rf /opt/camoufox/fonts/macos /opt/camoufox/fonts/windows
 
 # Bake the GeoIP database so camoufox-js never downloads it at runtime.
-# `geoip: true` (packages/browser/src/pool.ts) otherwise makes camoufox-js fetch
-# GeoLite2-City.mmdb from P3TERX/GeoLite.mmdb on first browser launch, into
+# When `geoip` is enabled, camoufox-js fetches GeoLite2-City.mmdb from
+# P3TERX/GeoLite.mmdb on first browser launch, into
 # $CAMOUFOX_INSTALL_DIR. An interrupted/truncated download leaves a corrupt file that
 # camoufox-js reuses forever (getGeolocation only re-downloads when the file is absent),
 # crashing every launch with "Invalid Extended Type at offset N val 7" (issue #20).

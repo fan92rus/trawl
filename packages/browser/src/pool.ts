@@ -16,9 +16,8 @@ type BrowserContext = any
 // wedged — tier3/tier4 already guard their temporary contexts this way. 10s is far above
 // the typical sub-second close path.
 const CLOSE_TIMEOUT_MS = 10_000
-// A cold Camoufox start is a few seconds; camoufox-js also does a public-IP lookup for
-// `geoip` before handing off to Playwright, which adds network time that Playwright's own
-// launch timeout does not cover. 90s is generous but finite.
+// A cold Camoufox start is a few seconds; 90s is generous but finite. Playwright's own
+// launch timeout does not cover camoufox-js's pre-launch work, so init() stays bounded.
 const LAUNCH_TIMEOUT_MS = 90_000
 
 /** Firefox must never silently retry a proxied navigation over the host's direct route. */
@@ -227,7 +226,6 @@ export class BrowserPool {
     //   `screen`         — randomize resolution per browser within realistic bounds.
     //   `window`         — randomize window size per browser.
     //   `humanize`       — randomized mouse movement + timing patterns.
-    //   `geoip`          — auto-derive timezone/locale from the server's IP.
     //   `block_webrtc`   — no IP leak via WebRTC.
     //   `disable_coop`   — keep cross-origin iframe interactivity (and avoid
     //                     crossOriginIsolated being false-detectable).
@@ -245,7 +243,12 @@ export class BrowserPool {
       // randomization (canvas seed, audio seed, font list, etc).
       screen: { minWidth: 1280, maxWidth: 2560, minHeight: 720, maxHeight: 1440 },
       window: [1920, 1080] as [number, number],
-      geoip: true,
+      // `geoip: true` would make camoufox-js call several public "what is my IP"
+      // endpoints before launching. They are unreachable from this host, so every
+      // launch failed with InvalidIP and the container restarted forever. The
+      // fingerprint's timezone/locale are set explicitly below, and WebRTC is
+      // blocked, so no lookup is needed for a coherent fingerprint.
+      geoip: false,
       // uBlock Origin (camoufox-js default addon) needs to be downloaded from
       // addons.mozilla.org on every browser launch and unpacked to a temp dir; in a
       // container with a flaky path to Mozilla that download intermittently fails and
@@ -563,8 +566,8 @@ export class BrowserPool {
   }
 
   // Runs `launchBrowser` under a hard deadline. Playwright's own launch timeout does not
-  // cover camoufox-js's pre-launch work (the `geoip` public-IP lookup), so a launch can
-  // outlive it; and an unbounded launch here is unrecoverable — see restartEntry.
+  // cover camoufox-js's pre-launch work, so a launch can outlive it; and an unbounded
+  // launch here is unrecoverable — see restartEntry.
   private async launchWithin(
     fingerprint: (typeof FINGERPRINT_POOL)[number],
     ms: number,
