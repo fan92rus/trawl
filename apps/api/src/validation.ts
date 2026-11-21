@@ -55,7 +55,7 @@ export function normalizeRequestCookies(cookies: unknown, host: string | undefin
     if (pathRaw !== undefined && typeof pathRaw !== "string") {
       throw new RequestValidationError("cookie path must be a string", 400)
     }
-    const fallbackDomain = host ? (host.startsWith(".") ? host : "." + host) : "."
+    const fallbackDomain = host ? (host.startsWith(".") ? host : `.${host}`) : "."
     out.push({
       name,
       value,

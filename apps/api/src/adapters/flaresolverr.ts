@@ -1,7 +1,7 @@
 import type { SupportedMethod } from "@trawl/tiers"
 import { normalizeProxy, requireContentTypeForBody, sanitizeHeaders } from "@trawl/tiers"
 import type { FlareSolverrRequest, FlareSolverrResponse, ScrapeRequest } from "@trawl/types"
-import { MITM_PROXY_ENABLED, MITM_PROXY_PORT } from "../config"
+import { MITM_PROXY_PORT } from "../config"
 
 function normalizeProwlarrHeaders(headers?: Record<string, string>): Record<string, string> | undefined {
   if (!headers) return
@@ -55,10 +55,15 @@ export function buildScrapeRequestFromFlareSolverr(req: FlareSolverrRequest): Sc
   }
 }
 
+// Reads the env vars lazily (not the config.ts snapshots) so tests — and callers
+// that set MITM_PROXY_* after import — see the live values.
 function isSelfMitmProxy(proxyUrl: string | undefined): boolean {
-  if (!proxyUrl || !MITM_PROXY_ENABLED) return false
+  if (!proxyUrl) return false
+  const enabled = /^(1|true|yes)$/i.test(process.env.MITM_PROXY_ENABLED ?? "")
+  if (!enabled) return false
   try {
-    return new URL(proxyUrl).port === String(MITM_PROXY_PORT)
+    const port = Number(process.env.MITM_PROXY_PORT ?? MITM_PROXY_PORT)
+    return Number(new URL(proxyUrl).port) === port
   } catch {
     return false
   }
