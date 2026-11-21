@@ -8,6 +8,7 @@ import {
   scrape,
 } from "@trawl/tiers"
 import { userCookiesForHost } from "../config"
+import { log } from "../logger"
 import { handleBrowserLogin, parseLoginFormData } from "./browserLogin"
 import { MitmCa } from "./ca"
 import { ChallengeCache } from "./challengeCache"
@@ -95,9 +96,9 @@ export function startMitmProxy(opts: MitmProxyOptions): MitmProxyHandle {
     clientSocket.on("error", () => clientSocket.destroy())
   })
 
-  server.on("error", (err) => console.error("[proxy] server error:", err instanceof Error ? err.message : err))
+  server.on("error", (err) => log.proxy.error({ err }, "server error"))
   server.listen(opts.port, opts.host, () => {
-    console.log(`[proxy] MITM forward proxy on ${opts.host}:${opts.port}  (CA: ${ca.caCertPath})`)
+    log.proxy.info({ host: opts.host, port: opts.port, caPath: ca.caCertPath }, "MITM forward proxy listening")
   })
 
   return { ca, server, tlsServers }
@@ -362,12 +363,12 @@ async function proxyRequest(
   }
 
   if (tier0.mode === "error") {
-    if (opts.debug) console.log(`[proxy] Tier 0 error for ${url}: ${tier0.error.message}`)
+    if (opts.debug) log.proxy.debug({ url, err: tier0.error.message }, "Tier 0 error")
     return await serveViaScrape(stream, url, method, clientHeaders, body, opts)
   }
 
   if (tier0.mode === "stream") {
-    if (opts.debug) console.log(`[proxy] Tier 0 stream for ${url} -> ${tier0.status}`)
+    if (opts.debug) log.proxy.debug({ url, status: tier0.status }, "Tier 0 stream")
     challengeCache.set(domain, "direct")
     writeResponseFromStream(
       stream,
@@ -382,7 +383,7 @@ async function proxyRequest(
   }
 
   if (tier0.challengeDetected) {
-    if (opts.debug) console.log(`[proxy] Tier 0 challenge for ${url} -> escalating to scrape()`)
+    if (opts.debug) log.proxy.debug({ url }, "Tier 0 challenge — escalating to scrape()")
     challengeCache.set(domain, "cf")
     return await serveViaScrape(stream, url, method, clientHeaders, body, opts)
   }
@@ -416,7 +417,7 @@ async function serveViaScrape(
     // because the browser sends a genuine POST with cf_clearance already set.
     const loginData = parseLoginFormData(url, method, body?.toString("utf8"))
     if (loginData) {
-      if (opts.debug) console.log(`[proxy] login form POST detected for ${url}`)
+      if (opts.debug) log.proxy.debug({ url }, "login form POST detected")
       const loginResult = await handleBrowserLogin(url, loginData, opts, opts.deps)
       if (loginResult) {
         writeResponseFromBufferMulti(
@@ -428,7 +429,7 @@ async function serveViaScrape(
         )
         return
       }
-      if (opts.debug) console.log(`[proxy] login handler returned null, falling through to scrape()`)
+      if (opts.debug) log.proxy.debug("login handler returned null, falling through to scrape()")
     }
 
     const scrapeResult = await scrape(
@@ -444,7 +445,7 @@ async function serveViaScrape(
         cookies: userCookiesForHost(new URL(url).hostname)?.map((c) => ({
           name: c.name,
           value: c.value,
-          domain: c.domain ?? "." + new URL(url).hostname,
+          domain: c.domain ?? `.${new URL(url).hostname}`,
           path: c.path ?? "/",
           expires: -1,
           httpOnly: false,
@@ -454,13 +455,23 @@ async function serveViaScrape(
       opts.deps,
     )
     if (opts.debug)
-      console.log(
-        `[proxy] scrape() tier ${scrapeResult.tier} for ${url} -> ${scrapeResult.statusCode} html=${scrapeResult.html?.length ?? 0}b body=${scrapeResult.body?.length ?? 0}b`,
+      log.proxy.debug(
+        {
+          url,
+          tier: scrapeResult.tier,
+          status: scrapeResult.statusCode,
+          htmlBytes: scrapeResult.html?.length ?? 0,
+          bodyBytes: scrapeResult.body?.length ?? 0,
+        },
+        "scrape() completed",
       )
 
     if (opts.debug) {
       for (const t of scrapeResult.timings) {
-        console.log(`  tier ${t.tier}: ${t.status} (${t.durationMs}ms) ${t.reason ?? ""}`)
+        log.proxy.debug(
+          { tier: t.tier, status: t.status, durationMs: t.durationMs, reason: t.reason ?? null },
+          "scrape() tier timing",
+        )
       }
     }
 
@@ -469,8 +480,13 @@ async function serveViaScrape(
     // Binary responses retain their exact raw bytes.
     const response = responseFromScrapeResult(scrapeResult, opts.cp1251Hosts)
     if (opts.debug) {
-      console.log(
-        `[proxy] writeResponseFromBuffer status=${scrapeResult.statusCode || 200} payload=${response.body.length}b contentType=${response.contentType}`,
+      log.proxy.debug(
+        {
+          status: scrapeResult.statusCode || 200,
+          payloadBytes: response.body.length,
+          contentType: response.contentType,
+        },
+        "writeResponseFromBuffer",
       )
     }
     writeResponseFromBuffer(
@@ -481,7 +497,7 @@ async function serveViaScrape(
       response.contentType,
     )
   } catch (err) {
-    console.error("[proxy] scrape() failed for", url, err instanceof Error ? err.message : err)
+    log.proxy.error({ url, err }, "scrape() failed")
     writeResponseFromBuffer(
       stream,
       502,

@@ -1,4 +1,5 @@
 import { ProxyPool } from "@trawl/tiers"
+import { log } from "./logger"
 
 export const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379"
 export const PORT = Number(process.env.PORT ?? "8191")
@@ -93,7 +94,7 @@ function loadUserCookies(): Record<string, UserCookie[]> {
     if (!text.trim()) return {}
     const parsed: unknown = JSON.parse(text)
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      console.warn("[config] USER_COOKIES_JSON: root must be an object {hostname: [cookies]}")
+      log.config.warn("USER_COOKIES_JSON: root must be an object {hostname: [cookies]}")
       return {}
     }
     const out: Record<string, UserCookie[]> = {}
@@ -103,10 +104,10 @@ function loadUserCookies(): Record<string, UserCookie[]> {
         (c): c is UserCookie => typeof c === "object" && c !== null && typeof (c as UserCookie).name === "string",
       )
     }
-    console.log(`[config] user cookies loaded for domains: ${Object.keys(out).join(", ") || "(none)"}`)
+    log.config.info({ domains: Object.keys(out) }, "user cookies loaded")
     return out
   } catch (err) {
-    console.warn("[config] USER_COOKIES_JSON load failed:", err instanceof Error ? err.message : err)
+    log.config.warn({ err }, "USER_COOKIES_JSON load failed")
     return {}
   }
 }

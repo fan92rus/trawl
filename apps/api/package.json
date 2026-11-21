@@ -13,7 +13,9 @@
     "@trawl/types": "workspace:*",
     "elysia": "^1.4.29",
     "memoirist": "1.2.2",
-    "node-forge": "^1.4.0"
+    "node-forge": "^1.4.0",
+    "@sentry/node": "^10.0.0",
+    "pino": "^10.0.0"
   },
   "devDependencies": {
     "typescript": "^7.0.2",

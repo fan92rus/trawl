@@ -5,6 +5,7 @@ import { Elysia } from "elysia"
 import { buildScrapeRequestFromFlareSolverr, flareSolverrError } from "../adapters/flaresolverr"
 import { userCookiesForHost } from "../config"
 import { getDeps, getPool } from "../deps"
+import { log } from "../logger"
 import { normalizeRequestCookies, requestUrl, validateFlareSolverrRequest } from "../validation"
 
 // FlareSolverr v2 compat — always open (the v2 spec has no auth header)
@@ -29,8 +30,9 @@ export function v1Route({
 
       // Debug aid for proxy-integration issues (Prowlarr/ReLampa): one line per
       // request with the fields that change downstream behaviour.
-      console.log(
-        `[v1] ${cmd} url=${req.url} proxy=${JSON.stringify(req.proxy ?? null)} ua=${req.headers?.["user-agent"] ?? "?"}`,
+      log.v1.info(
+        { cmd, url: req.url, proxy: req.proxy ?? null, ua: req.headers?.["user-agent"] ?? null },
+        "incoming /v1 request",
       )
 
       if (cmd !== "request.get" && cmd !== "request.post") {

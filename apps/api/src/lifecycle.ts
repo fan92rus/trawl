@@ -1,4 +1,5 @@
 import { shutdownPools } from "./deps"
+import { log, Sentry } from "./logger"
 
 export interface LifecycleOptions {
   onShutdown?: () => Promise<void>
@@ -12,11 +13,13 @@ export const registerLifecycleHandlers = (opts: LifecycleOptions = {}): void => 
   // Without this, one target site's malformed error crashes the entire process and drops
   // every in-flight request across all clients, not just the one that triggered it.
   process.on("uncaughtException", (err) => {
-    console.error("[api] uncaughtException (continuing):", err instanceof Error ? err.message : err)
+    Sentry.captureException(err)
+    log.api.error({ err }, "uncaughtException (continuing)")
   })
 
   process.on("unhandledRejection", (reason) => {
-    console.error("[api] unhandledRejection (continuing):", reason instanceof Error ? reason.message : reason)
+    Sentry.captureException(reason)
+    log.api.error({ err: reason }, "unhandledRejection (continuing)")
   })
 
   const shutdown = async () => {
@@ -24,7 +27,7 @@ export const registerLifecycleHandlers = (opts: LifecycleOptions = {}): void => 
       try {
         await opts.onShutdown()
       } catch (err) {
-        console.error("[api] onShutdown error:", err instanceof Error ? err.message : err)
+        log.api.error({ err }, "onShutdown error")
       }
     }
     await shutdownPools()

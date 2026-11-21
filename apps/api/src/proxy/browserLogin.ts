@@ -1,5 +1,6 @@
 import type { OrchestratorDeps } from "@trawl/tiers"
 import { userCookiesForHost } from "../config"
+import { log } from "../logger"
 import type { MitmProxyOptions } from "./server"
 
 export interface LoginResult {
@@ -16,7 +17,7 @@ export interface LoginResult {
  * Recognizes common field names: login_username/username/user + login_password/password/pass.
  */
 export function parseLoginFormData(
-  url: string,
+  _url: string,
   method: string,
   body: string | undefined,
 ): { username: string; password: string } | null {
@@ -85,11 +86,11 @@ export async function handleBrowserLogin(
 
     page = await ctx.newPage()
 
-    if (opts.debug) console.log(`[login] navigating to ${url} (CF solve if needed)...`)
+    if (opts.debug) log.login.debug({ url }, "navigating to login page (CF solve if needed)")
 
     // Navigate to the login page. CF challenge is solved here by Camoufox.
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 90_000 }).catch((e: Error) => {
-      if (opts.debug) console.log(`[login] goto (non-fatal): ${e.message.split("\n")[0]}`)
+      if (opts.debug) log.login.debug({ err: e.message.split("\n")[0] }, "goto (non-fatal)")
     })
 
     // Common username field selectors across forum/CMS platforms.
@@ -110,7 +111,7 @@ export async function handleBrowserLogin(
 
     if (formFound) {
       // ── Login form visible → fill and submit ──
-      if (opts.debug) console.log(`[login] filling form: ${formData.username}`)
+      if (opts.debug) log.login.debug({ username: formData.username }, "filling form")
       await page
         .fill('input[name="login_username"], input[name="username"], input[name="user"]', formData.username)
         .catch(() => {})
@@ -118,7 +119,7 @@ export async function handleBrowserLogin(
         .fill('input[name="login_password"], input[name="password"], input[name="pass"]', formData.password)
         .catch(() => {})
 
-      if (opts.debug) console.log(`[login] submitting form...`)
+      if (opts.debug) log.login.debug("submitting form")
       const submitSelector = [
         'input[name="login"]',
         'button[type="submit"]',
@@ -128,7 +129,7 @@ export async function handleBrowserLogin(
 
       await Promise.all([
         page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 60_000 }).catch((e: Error) => {
-          if (opts.debug) console.log(`[login] nav after submit (non-fatal): ${e.message.split("\n")[0]}`)
+          if (opts.debug) log.login.debug({ err: e.message.split("\n")[0] }, "nav after submit (non-fatal)")
         }),
         page
           .click(submitSelector)
@@ -152,9 +153,7 @@ export async function handleBrowserLogin(
 
     const loggedIn = html.includes("logged-in-username")
     if (opts.debug) {
-      console.log(
-        `[login] result: finalUrl=${finalUrl} loggedIn=${loggedIn} cookies=${cookies.length} html=${html.length}b`,
-      )
+      log.login.debug({ finalUrl, loggedIn, cookies: cookies.length, htmlBytes: html.length }, "login result")
     }
 
     if (loggedIn) {
@@ -164,7 +163,7 @@ export async function handleBrowserLogin(
     // Login failed — return the page anyway so Prowlarr sees the response.
     return buildLoginResult(html, cookies, "text/html; charset=utf-8")
   } catch (err) {
-    if (opts.debug) console.error(`[login] error:`, err instanceof Error ? err.message : err)
+    if (opts.debug) log.login.error({ err }, "login error")
     return null
   } finally {
     if (page) await page.close().catch(() => {})

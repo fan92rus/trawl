@@ -15,6 +15,7 @@ import {
   SESSION_TTL,
   STALL_TIMEOUT_MS,
 } from "./config"
+import { log, Sentry } from "./logger"
 
 const state: {
   pool?: BrowserPool
@@ -44,10 +45,11 @@ const initSessionCache = async (): Promise<void> => {
     })
     await sessionCache.connect()
     state.sessionCache = sessionCache
-    console.log("[api] session cache connected  (Tier 2 fast-path enabled)")
+    log.api.info("session cache connected (Tier 2 fast-path enabled)")
   } catch (err) {
     state.sessionCache = undefined
-    console.warn("[api] session cache unavailable — Tier 2 disabled:", err instanceof Error ? err.message : err)
+    log.api.error({ err }, "session cache unavailable — Tier 2 disabled")
+    Sentry.captureException(err)
   }
 }
 
@@ -95,14 +97,14 @@ export const initPool = async ({
     if (state.headfulPool) {
       await state.headfulPool.init()
       state.headfulPool.startHealthCheck()
-      console.log(`[api] headful pool warm (${headfulPoolSize} browser${headfulPoolSize === 1 ? "" : "s"})`)
+      log.api.info({ headfulPoolSize }, "headful pool warm")
     }
   } catch (error) {
     await Promise.all([pool.shutdown(), state.headfulPool?.shutdown()])
     throw error
   }
 
-  console.log(`[api] ready — all ${poolSize} browser${poolSize === 1 ? "" : "s"} warm`)
+  log.api.info({ poolSize }, "ready — all browsers warm")
 }
 
 export const getDeps = (): OrchestratorDeps => {

@@ -1,6 +1,5 @@
 import { Elysia } from "elysia"
 import {
-  CP1251_HOSTS,
   MITM_PROXY_CA_DIR,
   MITM_PROXY_DEBUG,
   MITM_PROXY_ENABLED,
@@ -12,6 +11,7 @@ import {
 } from "./config"
 import { getDeps, initPool } from "./deps"
 import { registerLifecycleHandlers } from "./lifecycle"
+import { log } from "./logger"
 import { type MitmProxyHandle, shutdownMitmProxy, startMitmProxy } from "./proxy/server"
 import { healthRoute } from "./routes/health"
 import { indexRoute } from "./routes/index"
@@ -29,7 +29,7 @@ new Elysia()
   .use(proxyCaRoute())
   .listen(PORT)
 
-console.log(`[api] TRAWL starting on :${PORT}  (pool: ${POOL_SIZE} browser${POOL_SIZE === 1 ? "" : "s"})`)
+log.api.info({ port: PORT, poolSize: POOL_SIZE }, "TRAWL starting")
 
 const state: { proxyHandle?: MitmProxyHandle } = {}
 
@@ -49,7 +49,7 @@ if (MITM_PROXY_ENABLED) {
 }
 
 poolReady.catch((err) => {
-  console.error("[api] startup failed:", err)
+  log.api.error({ err }, "startup failed")
   process.exit(1)
 })
 
