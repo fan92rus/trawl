@@ -83,8 +83,8 @@ RUN --mount=type=secret,id=GITHUB_TOKEN,env=GITHUB_TOKEN \
 
 # P3TERX/GeoLite.mmdb keeps only the last few daily releases, so a pin more than a few days
 # old stops resolving and the build fails on a 404 here. Bump both values together.
-ARG GEOLITE_RELEASE=2026.08.25
-ARG GEOLITE_CITY_SHA256=b481e34bdfbeb937434d09b47d89622c36051560c5f64853b54e081678c7df74
+ARG GEOLITE_RELEASE=2026.11.19
+ARG GEOLITE_CITY_SHA256=060a8699d32296e24536dd23f17e65ce12ba489a9ce607921df0ab01e41fa33c
 RUN curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30 \
       "https://github.com/P3TERX/GeoLite.mmdb/releases/download/${GEOLITE_RELEASE}/GeoLite2-City.mmdb" \
 
