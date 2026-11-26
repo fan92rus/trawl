@@ -279,6 +279,14 @@ export class BrowserPool {
         "dom.ipc.processPrelaunch": false,
         "dom.ipc.contentProcessCount": this.contentProcesses,
 
+        // The host's seccomp profile denies Firefox's content sandbox the
+        // unprivileged clone(CLONE_NEWUSER) it needs. When that fails, Camoufox
+        // dies with SIGSEGV on launch; the pool then hot-restarts it every 30s,
+        // leaking Playwright profile dirs and ~50 MB core dumps until the disk
+        // fills. Container isolation is the boundary here, so do not ask Firefox
+        // to start a sandbox it cannot use.
+        "security.sandbox.content.level": 0,
+
         // Telemetry
         "datareporting.healthreport.uploadEnabled": false,
         "datareporting.policy.dataSubmissionEnabled": false,

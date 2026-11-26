@@ -36,4 +36,17 @@ describe("Camoufox launch options", () => {
 
     await pool.shutdown()
   })
+
+  test("disables the Firefox content sandbox when user namespaces are unavailable", async () => {
+    const pool = new BrowserPool({ poolSize: 1 })
+    await pool.init()
+
+    const prefs = (launches.at(-1)?.firefox_user_prefs ?? {}) as Record<string, unknown>
+    // Without this, Camoufox exits SIGSEGV on "CanCreateUserNamespace() clone()
+    // failure: EPERM", the restart loop fills the disk with core dumps, and the
+    // health endpoint disappears with the process.
+    expect(prefs["security.sandbox.content.level"]).toBe(0)
+
+    await pool.shutdown()
+  })
 })
