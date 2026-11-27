@@ -1,13 +1,14 @@
-// Imperva/Incapsula sensor-cookie wait — mirrors challengeWait.ts's CF polling loop.
+// Imperva/Incapsula sensor-cookie wait - mirrors challengeWait.ts's CF polling loop.
 // Imperva's reese84 (current) / ___utmvc (legacy) cookies are produced by an obfuscated
 // in-page JS challenge that a real browser executing real JS satisfies without any
-// challenge-specific logic — we just wait for the cookie and let the page proceed.
+// challenge-specific logic - we just wait for the cookie and let the page proceed.
 //
 // Known risk: unlike CF Turnstile, Imperva's script sometimes layers in TLS/JA3 and
-// behavioral checks beyond plain cookie generation — success isn't guaranteed just
+// behavioral checks beyond plain cookie generation - success isn't guaranteed just
 // because we're a real browser. Validate against a real Imperva-protected site.
 
 import type { Page } from "patchright"
+import { sleep } from "./deadline"
 import { hasImpervaChallenge } from "./detect"
 
 export async function waitForImpervaResolution(
@@ -15,7 +16,9 @@ export async function waitForImpervaResolution(
   timeoutMs: number,
   originalUrl?: string,
 ): Promise<"ok" | "ip-blocked" | "timeout"> {
-  const deadline = Date.now() + Math.max(timeoutMs, 30_000)
+  if (timeoutMs <= 0) return "timeout"
+  const deadline = Date.now() + timeoutMs
+  const remaining = () => Math.max(0, deadline - Date.now())
   let sensorCookieAt: number | undefined
 
   const targetHost = (() => {
@@ -27,16 +30,22 @@ export async function waitForImpervaResolution(
   })()
 
   const earlyHtml = await page.content().catch(() => "")
-  if (earlyHtml && !hasImpervaChallenge(earlyHtml)) {
-    await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {})
+  if (earlyHtml.trim() && !hasImpervaChallenge(earlyHtml)) {
+    await page.waitForLoadState("networkidle", { timeout: Math.max(1, Math.min(5000, remaining())) }).catch(() => {})
     return "ok"
   }
 
   // Let Imperva's sensor JS boot up before polling
-  await new Promise((r) => setTimeout(r, 1000))
+  await sleep(Math.min(1000, remaining()))
 
   while (Date.now() < deadline) {
     try {
+      const html = await page.content().catch(() => "")
+      if (html.trim() && !hasImpervaChallenge(html)) {
+        await page.waitForLoadState("load", { timeout: Math.max(1, Math.min(5000, remaining())) }).catch(() => {})
+        return "ok"
+      }
+
       const cookies: Array<{ name: string; domain: string }> = await page
         .context()
         .cookies()
@@ -47,7 +56,7 @@ export async function waitForImpervaResolution(
           targetHost &&
           (c.domain === targetHost ||
             c.domain === `.${targetHost}` ||
-            targetHost.endsWith(c.domain.replace(/^\./, ""))),
+            targetHost.endsWith(`.${c.domain.replace(/^\./, "")}`)),
       )
 
       if (hasSensorCookie) {
@@ -56,28 +65,26 @@ export async function waitForImpervaResolution(
           console.log("[imperva] sensor cookie obtained")
         }
 
-        const html = await page.content().catch(() => "")
-        if (!hasImpervaChallenge(html)) {
-          await page.waitForLoadState("load", { timeout: 5000 }).catch(() => {})
-          return "ok"
-        }
-
-        // Sensor cookie set but still on the challenge page — Imperva's redirect
+        // Sensor cookie set but still on the challenge page - Imperva's redirect
         // sometimes doesn't auto-fire (unlike CF). Navigate ourselves after a grace period.
         if (originalUrl && Date.now() - sensorCookieAt > 5000) {
-          console.log("[imperva] sensor cookie set but still on challenge page — navigating to original URL")
-          await page.goto(originalUrl, { waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => {})
-          await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => {})
+          console.log("[imperva] sensor cookie set but still on challenge page - navigating to original URL")
+          await page
+            .goto(originalUrl, { waitUntil: "domcontentloaded", timeout: Math.max(1, Math.min(15000, remaining())) })
+            .catch(() => {})
+          await page
+            .waitForLoadState("networkidle", { timeout: Math.max(1, Math.min(8000, remaining())) })
+            .catch(() => {})
           const html2 = await page.content().catch(() => "")
-          if (hasImpervaChallenge(html2)) return "ip-blocked"
+          if (!html2.trim() || hasImpervaChallenge(html2)) return "ip-blocked"
           return "ok"
         }
       }
     } catch {
-      // Page is mid-navigation — keep polling
+      // Page is mid-navigation - keep polling
     }
 
-    await new Promise((r) => setTimeout(r, 300))
+    await sleep(Math.min(300, remaining()))
   }
 
   return "timeout"

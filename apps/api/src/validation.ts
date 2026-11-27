@@ -4,6 +4,7 @@ import {
   requireContentTypeForBody,
   SUPPORTED_METHODS,
   sanitizeHeaders,
+  validateSessionId,
 } from "@trawl/tiers"
 import type { Cookie, FlareSolverrRequest, ScrapeRequest } from "@trawl/types"
 
@@ -71,18 +72,122 @@ export function normalizeRequestCookies(cookies: unknown, host: string | undefin
 
 export function validateFlareSolverrRequest(body: unknown): asserts body is FlareSolverrRequest {
   requireRequestRecord(body)
-  requireUrl(body)
+  if (typeof body.cmd === "string" && body.cmd.startsWith("sessions.")) {
+    if (body.session !== undefined) validateSessionId(body.session)
+    if (body.cmd === "sessions.destroy" && body.session === undefined) validateSessionId(body.session)
+  } else {
+    requireUrl(body)
+    if (body.session !== undefined) validateSessionId(body.session)
+    if (
+      body.session_ttl_minutes !== undefined &&
+      (typeof body.session_ttl_minutes !== "number" ||
+        !Number.isFinite(body.session_ttl_minutes) ||
+        body.session_ttl_minutes < 0 ||
+        !Number.isFinite(body.session_ttl_minutes * 60_000))
+    )
+      throw new RequestValidationError("session_ttl_minutes must be a non-negative finite number", 400)
+    for (const field of ["returnOnlyCookies", "returnScreenshot", "solveEmbeddedCaptchas"] as const)
+      if (body[field] !== undefined && typeof body[field] !== "boolean")
+        throw new RequestValidationError(`${field} must be a boolean`, 400)
+  }
 }
 
 export function validateScrapeRequest(body: unknown): asserts body is ScrapeRequest {
   requireRequestRecord(body)
   requireUrl(body)
+  if (body.sessionId !== undefined) validateSessionId(body.sessionId)
   const req = body as RequestRecord & Partial<ScrapeRequest>
   if (!isValidMethod(req.method)) {
     throw new RequestValidationError(
       `Unsupported method: ${String(req.method)} (allowed: ${SUPPORTED_METHODS.join(", ")})`,
       400,
     )
+  }
+  if (req.screenshot !== undefined && typeof req.screenshot !== "boolean") {
+    throw new RequestValidationError("screenshot must be a boolean", 400)
+  }
+  if (req.screenshotFullPage !== undefined && typeof req.screenshotFullPage !== "boolean") {
+    throw new RequestValidationError("screenshotFullPage must be a boolean", 400)
+  }
+  if (
+    req.screenshotWaitForSelector !== undefined &&
+    (typeof req.screenshotWaitForSelector !== "string" ||
+      !req.screenshotWaitForSelector.trim() ||
+      req.screenshotWaitForSelector.length > 500)
+  ) {
+    throw new RequestValidationError(
+      "screenshotWaitForSelector must be a non-empty CSS selector of at most 500 characters",
+      400,
+    )
+  }
+  if (
+    req.screenshotSelector !== undefined &&
+    (typeof req.screenshotSelector !== "string" ||
+      !req.screenshotSelector.trim() ||
+      req.screenshotSelector.length > 500)
+  ) {
+    throw new RequestValidationError(
+      "screenshotSelector must be a non-empty CSS selector of at most 500 characters",
+      400,
+    )
+  }
+  if (req.screenshotFullPage && req.screenshotSelector) {
+    throw new RequestValidationError("screenshotFullPage cannot be combined with screenshotSelector", 400)
+  }
+  if (
+    req.contentWaitForSelector !== undefined &&
+    (typeof req.contentWaitForSelector !== "string" ||
+      !req.contentWaitForSelector.trim() ||
+      req.contentWaitForSelector.length > 500)
+  ) {
+    throw new RequestValidationError(
+      "contentWaitForSelector must be a non-empty CSS selector of at most 500 characters",
+      400,
+    )
+  }
+  for (const field of [
+    "detectWaf",
+    "solveEmbeddedCaptchas",
+    "consoleLogs",
+    "networkLogs",
+    "redirectChain",
+    "blockedEvidence",
+    "mhtml",
+    "ignoreCertificateErrors",
+    "followMetaRefresh",
+    "allowShortContent",
+    "favicons",
+    "httpReplay",
+  ] as const) {
+    if (req[field] !== undefined && typeof req[field] !== "boolean") {
+      throw new RequestValidationError(`${field} must be a boolean`, 400)
+    }
+  }
+  if (req.captureResponses !== undefined) {
+    if (!Array.isArray(req.captureResponses) || !req.captureResponses.every((pattern) => typeof pattern === "string")) {
+      throw new RequestValidationError("captureResponses must be an array of strings", 400)
+    }
+    if (req.captureResponses.length > 10) {
+      throw new RequestValidationError("captureResponses must contain at most 10 patterns", 400)
+    }
+    if (req.captureResponses.some((pattern) => pattern.trim().length === 0 || pattern.length > 2_000)) {
+      throw new RequestValidationError("captureResponses patterns must be non-empty and at most 2000 characters", 400)
+    }
+  }
+  if (
+    req.settleTimeout !== undefined &&
+    (typeof req.settleTimeout !== "number" ||
+      !Number.isFinite(req.settleTimeout) ||
+      !Number.isInteger(req.settleTimeout) ||
+      req.settleTimeout < 0)
+  ) {
+    throw new RequestValidationError("settleTimeout must be a non-negative finite integer", 400)
+  }
+  if (
+    req.waitForSelector !== undefined &&
+    (typeof req.waitForSelector !== "string" || req.waitForSelector.trim() === "")
+  ) {
+    throw new RequestValidationError("waitForSelector must be a non-empty string", 400)
   }
   requireContentTypeForBody(sanitizeHeaders(req.headers), Boolean(req.body))
 }

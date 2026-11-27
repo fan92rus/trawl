@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test"
 import type { BrowserHandle } from "@trawl/browser"
 import type { AcquireOptions, OrchestratorDeps } from "../src/orchestrator"
 import { scrape } from "../src/orchestrator"
+import { tier1Transport } from "../src/utils/tier1Transport"
 import { DATADOME_INTERSTITIAL } from "./fixtures/datadome"
 
 const server = Bun.serve({
@@ -55,19 +56,19 @@ describe("headful pool routing", () => {
   test("a DataDome wall in Tier 1 asks for a headful browser", async () => {
     const { deps, acquired } = recordingDeps()
     await scrape({ url: `${baseUrl}/datadome` }, deps).catch(() => {})
-    expect(acquired).toEqual([{ headful: true }])
+    expect(acquired).toEqual([{ headful: true, signal: expect.any(AbortSignal) }])
   })
 
   test("every other wall stays on the headless pool", async () => {
     const { deps, acquired } = recordingDeps()
     await scrape({ url: `${baseUrl}/cloudflare` }, deps).catch(() => {})
-    expect(acquired).toEqual([{ headful: false }])
+    expect(acquired).toEqual([{ headful: false, signal: expect.any(AbortSignal) }])
   })
 
   test("a request that skips Tier 1 cannot know the wall and stays headless", async () => {
     const { deps, acquired } = recordingDeps()
     await scrape({ url: `${baseUrl}/datadome`, skipHttp: true }, deps).catch(() => {})
-    expect(acquired).toEqual([{ headful: false }])
+    expect(acquired).toEqual([{ headful: false, signal: expect.any(AbortSignal) }])
   })
 
   test("retries a late Tier 2 DataDome wall once with a headful lease", async () => {
@@ -157,10 +158,10 @@ describe("headful pool routing", () => {
   })
 
   test("preserves an explicit HTTPS proxy after Tier 1 detects DataDome", async () => {
-    const originalFetch = globalThis.fetch
+    const originalFetch = tier1Transport.fetch
     const proxies: Array<string | undefined> = []
     const fetchProxies: Array<string | undefined> = []
-    globalThis.fetch = (async (_input, init) => {
+    tier1Transport.fetch = (async (_input, init) => {
       fetchProxies.push((init as (RequestInit & { proxy?: string }) | undefined)?.proxy)
       return new Response(DATADOME_INTERSTITIAL, {
         status: 403,
@@ -185,7 +186,7 @@ describe("headful pool routing", () => {
       expect(fetchProxies).toEqual(["https://proxy.test:8443"])
       expect(proxies).toEqual(["https://proxy.test:8443"])
     } finally {
-      globalThis.fetch = originalFetch
+      tier1Transport.fetch = originalFetch
     }
   })
 
@@ -200,7 +201,7 @@ describe("headful pool routing", () => {
       proxyPool: {
         next: () => "https://datacenter.test:8443",
         markBad: () => {},
-      } as OrchestratorDeps["proxyPool"],
+      } as unknown as OrchestratorDeps["proxyPool"],
     }
     const result = await scrape({ url: "https://example.test", skipHttp: true, maxTier: 3 }, deps, {
       tier3: async (_url, handle, _timeout, proxy) => {
@@ -223,9 +224,10 @@ describe("headful pool routing", () => {
       saveSession: async () => {},
       invalidateSession: async () => {},
       residentialProxyPool: {
+        hasAvailable: () => true,
         next: () => "http://residential.test:8080",
         markBad: () => {},
-      } as OrchestratorDeps["residentialProxyPool"],
+      } as unknown as OrchestratorDeps["residentialProxyPool"],
     }
     const result = await scrape({ url: "https://example.test", skipHttp: true }, deps, {
       tier3: async () => ({ tier: 3, status: "blocked", durationMs: 1, reason: "other-wall" }),

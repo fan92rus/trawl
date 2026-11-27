@@ -3,16 +3,19 @@ const docsUrl = useDocsUrl()
 </script>
 
 <template>
-  <footer class="footer">
+  <footer id="site-footer" class="footer">
     <div class="footer-inner">
       <div class="footer-left">
-        <span class="brand">TRAWL</span>
+        <BrandWordmark />
         <span class="sep">·</span>
-        <span class="tagline">bypass anything.</span>
+        <span class="tagline">scrape faster.</span>
       </div>
       <div class="footer-center">
         <a href="https://github.com/germondai/trawl" target="_blank" rel="noopener noreferrer">GitHub</a>
         <a :href="docsUrl">Docs</a>
+        <a href="https://github.com/germondai/trawl/releases/tag/v1.12.0" target="_blank" rel="noopener noreferrer"
+          >v1.12.0</a
+        >
         <a href="https://github.com/germondai/trawl/issues" target="_blank" rel="noopener noreferrer">Issues</a>
         <a href="https://github.com/germondai/trawl/blob/main/LICENSE" target="_blank" rel="noopener noreferrer"
           >AGPL-3.0</a
@@ -40,8 +43,9 @@ const docsUrl = useDocsUrl()
   max-width: 1100px;
   margin: 0 auto;
   padding: 0 32px;
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
   align-items: center;
   gap: 24px;
 }
@@ -50,13 +54,6 @@ const docsUrl = useDocsUrl()
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.brand {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  color: var(--text);
 }
 
 .sep {
@@ -68,6 +65,7 @@ const docsUrl = useDocsUrl()
   font-size: 11px;
   letter-spacing: 0.04em;
   color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .footer-center {
@@ -109,7 +107,7 @@ const docsUrl = useDocsUrl()
 
 @media (max-width: 640px) {
   .footer-inner {
-    grid-template-columns: 1fr;
+    flex-direction: column;
     gap: 14px;
     text-align: center;
     padding: 0 16px;

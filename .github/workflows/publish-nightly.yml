@@ -1,29 +1,65 @@
 name: Publish Nightly
 
 # Builds the disposable `:nightly` and `:nightly-<sha>` tags of
-# `ghcr.io/.../trawl` from `apps/api/Dockerfile` on every push to `main`.
+# `ghcr.io/.../trawl` from the latest `dev` commit every day at 02:00 UTC, or
+# when a maintainer starts the workflow manually.
 #
 # Lives separately from publish.yml (release builds on `v*` tags) and
 # publish-baseline.yml (baseline runtime builds on `v*`/`*-baseline` tags)
 # so:
 #   - `v*` tag pushes never trigger a nightly rebuild (release is exclusive)
-#   - main pushes never trigger a release/baseline rebuild
+#   - branch pushes never trigger an image rebuild
 #   - each workflow has its own GHA cache scope (no cross-pollution)
 #
 # Tag contract:
-#   - push to `main` -> :nightly-<sha> + :nightly
-#   - `:latest` is intentionally NOT touched here — that's owned by
+#   - scheduled/manual run -> :nightly-<dev-sha> + :nightly
+#   - `:latest` is intentionally NOT touched here - that's owned by
 #     publish.yml and only moves on `v*` release pushes.
 
 on:
-  push:
-    branches: [main]
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+# Only the newest dev revision needs a rolling nightly image. Digest-addressed
+# layers from an older run remain valid, but its moving tags must not win a race.
+concurrency:
+  group: publish-nightly
+  cancel-in-progress: true
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/trawl
 
 jobs:
+  revision:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.revision.outputs.sha }}
+      short-sha: ${{ steps.revision.outputs.short-sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev
+      - name: Resolve dev revision
+        id: revision
+        shell: bash
+        run: |
+          sha=$(git rev-parse HEAD)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short-sha=${sha:0:7}" >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: revision
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.revision.outputs.sha }}
+
   build:
+    needs: [revision, verify]
     strategy:
       matrix:
         include:
@@ -43,6 +79,8 @@ jobs:
         run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/trawl" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.revision.outputs.sha }}
 
       - uses: docker/login-action@v4
         with:
@@ -91,7 +129,7 @@ jobs:
 
   merge:
     runs-on: ubuntu-latest
-    needs: build
+    needs: [revision, build]
     permissions:
       contents: read
       packages: write
@@ -120,10 +158,11 @@ jobs:
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            # main branch push → :nightly (disposable test build).
+            # Scheduled/manual dev build → :nightly (disposable test build).
             type=raw,value=nightly
-            # main branch push → :nightly-<sha> for traceability.
-            type=sha,prefix=nightly-
+            # Pin the tag to the dev revision, not the default-branch revision
+            # from which GitHub loads scheduled workflow definitions.
+            type=raw,value=nightly-${{ needs.revision.outputs.short-sha }}
 
       - name: Create and push multi-arch manifest
         working-directory: /tmp/digests
@@ -136,8 +175,8 @@ jobs:
         run: |
           # Pull the first tag actually pushed by docker/metadata-action in the
           # previous step. DOCKER_METADATA_OUTPUT_JSON.tags[] is already
-          # fully-qualified ("ghcr.io/germondai/trawl:nightly-…") so no $IMAGE
-          # prefix needed — the legacy logic re-derived from github.ref /
+          # fully-qualified ("ghcr.io/germondai/trawl:nightly-...") so no $IMAGE
+          # prefix needed - the legacy logic re-derived from github.ref /
           # github.sha which disagreed with what got pushed (type=sha writes
           # short 7-char SHA but github.sha is the full 40-char hash).
           tag=$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")

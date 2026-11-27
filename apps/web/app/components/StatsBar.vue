@@ -1,43 +1,17 @@
 <script lang="ts" setup>
-const animated = shallowRef(false)
-const counts = ref([0, 0, 0, 0])
+import { repeatSpeedup } from "../utils/benchmarks"
 
 const cells = [
-  { label: "execution tiers", suffix: "", target: 4, prefix: "" },
-  { label: "cached domain latency", suffix: "ms", target: 500, prefix: "< " },
-  { label: "faster on warm domains", suffix: "×", target: 30, prefix: "" },
-  { label: "external API keys needed", suffix: "", target: 0, prefix: "" },
+  { value: "4", prefix: "", suffix: "", label: "execution tiers" },
+  { value: "1", prefix: "", suffix: "", label: "warm browser by default" },
+  {
+    value: repeatSpeedup ?? "n/a",
+    prefix: "",
+    suffix: repeatSpeedup ? "×" : "",
+    label: "faster repeat median vs FlareSolverr on 1337x · default /v1",
+  },
+  { value: "0", prefix: "", suffix: "", label: "paid solvers required" },
 ]
-
-function animateTo(index: number, target: number, duration = 900) {
-  const start = Date.now()
-  const step = () => {
-    const progress = Math.min((Date.now() - start) / duration, 1)
-    const ease = 1 - (1 - progress) ** 3
-    counts.value[index] = ease * target
-    if (progress < 1) requestAnimationFrame(step)
-    else counts.value[index] = target
-  }
-  requestAnimationFrame(step)
-}
-
-onMounted(() => {
-  const el = document.querySelector(".stats-bar")
-  if (!el) return
-  const observer = new IntersectionObserver(
-    (entries) => {
-      if (entries[0]?.isIntersecting && !animated.value) {
-        animated.value = true
-        cells.forEach((c, i) => {
-          animateTo(i, c.target, 800 + i * 120)
-        })
-        observer.disconnect()
-      }
-    },
-    { threshold: 0.3 },
-  )
-  observer.observe(el)
-})
 </script>
 
 <template>
@@ -51,10 +25,7 @@ onMounted(() => {
         :visible-once="{ opacity: 1, y: 0, transition: { delay: i * 80, duration: 400 } }"
         class="stat-cell"
       >
-        <div class="stat-value">
-          <span v-if="cell.prefix" class="stat-prefix">{{ cell.prefix }}</span
-          ><span class="accent">{{ Math.round(counts[i] ?? 0) }}</span>{{ cell.suffix }}
-        </div>
+        <div class="stat-value">{{ cell.prefix }}<span class="accent">{{ cell.value }}</span>{{ cell.suffix }}</div>
         <div class="stat-label">{{ cell.label }}</div>
       </div>
     </div>
@@ -88,10 +59,6 @@ onMounted(() => {
   font-weight: 700;
   letter-spacing: -0.03em;
   line-height: 1;
-  color: var(--text);
-}
-
-.stat-prefix {
   color: var(--text);
 }
 

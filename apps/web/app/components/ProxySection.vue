@@ -8,8 +8,9 @@ const docsUrl = useDocsUrl()
       <p class="eyebrow">challenge-aware proxy</p>
       <h2 class="section-title">one proxy. challenge-aware by default.</h2>
       <p class="section-sub">
-        Point any HTTP-compatible client at port 8192. Normal traffic takes the direct path; detected challenge pages
-        automatically escalate through TRAWL's browser solver and return the resolved response.
+        Enable MITM_ENABLED=true and point your HTTP-compatible client at port 8192. Normal traffic takes the direct
+        path; detected challenge pages automatically escalate through TRAWL's browser solver and return the resolved
+        response.
       </p>
 
       <div class="proxy-panel">
@@ -36,7 +37,7 @@ const docsUrl = useDocsUrl()
 
           <div class="proxy-code">
             <span class="code-prompt">$</span>
-            <code>curl --proxy http://localhost:8192 https://example.com</code>
+            <code>curl --cacert trawl-ca.crt --proxy http://localhost:8192 https://nopecha.com/demo/cloudflare</code>
           </div>
         </div>
 
@@ -93,6 +94,7 @@ const docsUrl = useDocsUrl()
 }
 
 .proxy-panel {
+  overflow: hidden;
   display: grid;
   grid-template-columns: 1.15fr 0.85fr;
   border: 1px solid var(--border-strong);
@@ -164,6 +166,8 @@ const docsUrl = useDocsUrl()
 }
 
 .proxy-capabilities {
+  min-width: 0;
+  overflow-wrap: anywhere;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -197,7 +201,7 @@ const docsUrl = useDocsUrl()
   color: var(--accent);
 }
 
-@media (max-width: 800px) {
+@media (max-width: 1100px) {
   .proxy-panel {
     grid-template-columns: 1fr;
   }
@@ -208,20 +212,22 @@ const docsUrl = useDocsUrl()
   }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 800px) {
   .proxy-flow,
   .proxy-capabilities {
     padding: 24px 20px;
   }
 
+  .flow-branch {
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 560px) {
   .flow-row,
   .flow-branch {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .flow-branch {
-    margin-left: 0;
   }
 
   .flow-arrow {

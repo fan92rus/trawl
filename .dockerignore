@@ -11,8 +11,9 @@
 !apps/docs/**/*.md
 .github/
 docker-compose*.yml
+native/*/target/
 
-# Local agent / IDE state — not needed at build or runtime
+# Local agent / IDE state - not needed at build or runtime
 .git/
 .claude/
 .gitignore
@@ -22,17 +23,14 @@ docker-compose*.yml
 .vscode/
 .dockerignore
 
-# Sources for apps not built into this image (apps/web, apps/docs) — exclude
-# their source/build dirs but keep each package.json (the workspace `bun install`
-# needs them for dependency resolution).
-apps/web/**
-!apps/web/package.json
-apps/docs/**
-!apps/docs/package.json
+# Shared fallback for every image. Web/docs sources must remain available when
+# deployment tools relocate Dockerfiles and do not use Dockerfile.dockerignore.
+# Per-Dockerfile ignore files can narrow the context for normal local builds.
 
 # Local scripts used for human-in-the-loop testing (e2e probe, soak test); not used in image.
 scripts/
 
-# Tests never run inside the image.
+# Test sources are mounted read-only for smoke tests; exclude them from shipped images.
 **/*.test.ts
 **/__tests__/
+**/tests/

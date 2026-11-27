@@ -17,7 +17,7 @@ const stats = (overrides: Partial<PoolStats> = {}): PoolStats => ({
 describe("GET /stats", () => {
   test("reports the optional headful pool additively", async () => {
     const response = await statsRoute(
-      () => stats({ total: 3, available: 2, busy: 1 }),
+      () => stats({ total: 3, available: 2, busy: 1, queueDepth: 2, longestBusyMs: 4200 }),
       () => stats({ total: 1, restarts: 2 }),
     ).handle(new Request("http://localhost/stats"))
 
@@ -28,8 +28,20 @@ describe("GET /stats", () => {
       stalled: 0,
       live: 1,
       restarts: 0,
-      queueDepth: 0,
-      headful: { browsers: 1, available: 1, busy: 0, stalled: 0, live: 1, restarts: 2 },
+      queueDepth: 2,
+      longestBusyMs: 4200,
+      draining: false,
+      headful: {
+        browsers: 1,
+        available: 1,
+        busy: 0,
+        stalled: 0,
+        live: 1,
+        restarts: 2,
+        queueDepth: 0,
+        longestBusyMs: 0,
+        draining: false,
+      },
     })
   })
 
@@ -39,5 +51,15 @@ describe("GET /stats", () => {
       () => undefined,
     ).handle(new Request("http://localhost/stats"))
     expect((await response.json()).headful).toBeNull()
+  })
+
+  test("reports a pool draining for shutdown", async () => {
+    const response = await statsRoute(
+      () => stats({ draining: true }),
+      () => stats({ draining: true }),
+    ).handle(new Request("http://localhost/stats"))
+    const body = await response.json()
+    expect(body.draining).toBeTrue()
+    expect(body.headful.draining).toBeTrue()
   })
 })

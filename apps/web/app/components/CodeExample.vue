@@ -1,9 +1,10 @@
 <script lang="ts" setup>
-type Tab = "curl" | "js" | "python" | "prowlarr" | "headers"
+type Tab = "curl" | "js" | "python" | "prowlarr" | "headers" | "sessions"
 const active = shallowRef<Tab>("curl")
 
 const tabs: { id: Tab; label: string }[] = [
   { id: "curl", label: "curl" },
+  { id: "sessions", label: "sessions" },
   { id: "js", label: "javascript" },
   { id: "python", label: "python" },
   { id: "prowlarr", label: "prowlarr" },
@@ -11,19 +12,19 @@ const tabs: { id: Tab; label: string }[] = [
 ]
 
 const code: Record<Tab, string> = {
-  curl: `<span class="c"># FlareSolverr-compatible endpoint (always open — *arr compatible)</span>
+  curl: `<span class="c"># Native scraping API</span>
+curl -s -X POST http://localhost:8191/scrape \\
+  -H <span class="s">"Content-Type: application/json"</span> \\
+  -d <span class="s">'{"url":"https://nopecha.com/demo/cloudflare","maxTimeout":60000}'</span> | jq <span class="s">'{tier,totalMs}'</span>
+
+<span class="c"># FlareSolverr-compatible request</span>
 curl -s -X POST http://localhost:8191/v1 \\
   -H <span class="s">"Content-Type: application/json"</span> \\
   -d <span class="s">'{
     "cmd": "request.get",
-    "url": "https://nowsecure.nl",
+    "url": "https://nopecha.com/demo/cloudflare",
     "maxTimeout": 60000
-  }'</span> | jq <span class="s">'.solution.response'</span>
-
-<span class="c"># Native API — richer response with tier, timings, sessionCached</span>
-curl -s -X POST http://localhost:8191/scrape \\
-  -H <span class="s">"Content-Type: application/json"</span> \\
-  -d <span class="s">'{"url":"https://nowsecure.nl"}'</span> | jq <span class="s">'{tier,totalMs}'</span>`,
+  }'</span> | jq <span class="s">'.solution.response'</span>`,
 
   js: `<span class="c">// FlareSolverr-compatible endpoint</span>
 <span class="kw">const</span> res = <span class="kw">await</span> fetch(<span class="s">"http://localhost:8191/v1"</span>, {
@@ -31,7 +32,7 @@ curl -s -X POST http://localhost:8191/scrape \\
   headers: { <span class="s">"Content-Type"</span>: <span class="s">"application/json"</span> },
   body: JSON.stringify({
     cmd: <span class="s">"request.get"</span>,
-    url: <span class="s">"https://nowsecure.nl"</span>,
+    url: <span class="s">"https://nopecha.com/demo/cloudflare"</span>,
     maxTimeout: <span class="n">60000</span>,
   }),
 })
@@ -47,7 +48,7 @@ console.log(solution.userAgent) <span class="c">// browser UA used</span>`,
 <span class="c"># FlareSolverr-compatible endpoint</span>
 res = requests.post(<span class="s">"http://localhost:8191/v1"</span>, json={
     <span class="s">"cmd"</span>: <span class="s">"request.get"</span>,
-    <span class="s">"url"</span>: <span class="s">"https://nowsecure.nl"</span>,
+    <span class="s">"url"</span>: <span class="s">"https://nopecha.com/demo/cloudflare"</span>,
     <span class="s">"maxTimeout"</span>: <span class="n">60000</span>,
 }, timeout=<span class="n">65</span>)
 
@@ -57,10 +58,11 @@ assert data[<span class="s">"status"</span>] == <span class="s">"ok"</span>
 html    = data[<span class="s">"solution"</span>][<span class="s">"response"</span>]
 cookies = data[<span class="s">"solution"</span>][<span class="s">"cookies"</span>]`,
 
-  headers: `<span class="c"># Pass any header — forwarded to the target across all tiers</span>
+  headers: `<span class="c"># Pass any header - forwarded to the target across all tiers</span>
 curl -s -X POST http://localhost:8191/v1 \\
   -H <span class="s">"Content-Type: application/json"</span> \\
   -d <span class="s">'{
+    "cmd": "request.get",
     "url": "https://example.com/embed",
     "headers": {
       "Authorization": "Bearer my-token",
@@ -69,7 +71,7 @@ curl -s -X POST http://localhost:8191/v1 \\
     }
   }'</span>
 
-<span class="c"># Native API — same headers field, richer response</span>
+<span class="c"># Native API - same headers field, richer response</span>
 curl -s -X POST http://localhost:8191/scrape \\
   -H <span class="s">"Content-Type: application/json"</span> \\
   -d <span class="s">'{
@@ -80,6 +82,21 @@ curl -s -X POST http://localhost:8191/scrape \\
 <span class="c"># Headers are scoped to the target URL only.</span>
 <span class="c"># CF challenge endpoints and subresources are never intercepted.</span>`,
 
+  sessions: `<span class="c"># Create an isolated browser session</span>
+curl -s -X POST http://localhost:8191/sessions \\
+  -H <span class="s">"Content-Type: application/json"</span> \\
+  -d <span class="s">'{"id":"research"}'</span>
+
+<span class="c"># Reuse cookies and browser storage</span>
+curl -s -X POST http://localhost:8191/scrape \\
+  -H <span class="s">"Content-Type: application/json"</span> \\
+  -d <span class="s">'{"url":"https://nopecha.com/demo/cloudflare","sessionId":"research"}'</span>
+
+<span class="c"># Close the session when done</span>
+curl -s -X DELETE http://localhost:8191/sessions/research
+
+<span class="c"># Sessions are process-local. Recreate them after restart or eviction.</span>`,
+
   prowlarr: `<span class="c"># Prowlarr → Settings → Indexers → FlareSolverr</span>
 <span class="c"># Paste one of these into the FlareSolverr URL field:</span>
 
@@ -89,7 +106,7 @@ curl -s -X POST http://localhost:8191/scrape \\
 <span class="c"># running in Docker alongside Prowlarr:</span>
 <span class="s">http://trawl:8191</span>
 
-<span class="c"># TRAWL implements the v2 API exactly — no other changes needed.</span>`,
+<span class="c"># Use the FlareSolverr-compatible endpoint for requests and sessions.</span>`,
 }
 </script>
 
@@ -97,7 +114,7 @@ curl -s -X POST http://localhost:8191/scrape \\
   <section id="usage" class="section">
     <div class="container">
       <p class="eyebrow">API usage</p>
-      <h2 class="section-title">works with everything.</h2>
+      <h2 class="section-title">one engine. several ways in.</h2>
 
       <div
         v-motion
@@ -119,7 +136,7 @@ curl -s -X POST http://localhost:8191/scrape \\
             {{ tab.label }}
           </button>
           <div class="tab-spacer" />
-          <span class="tab-hint">POST /v1 · FlareSolverr v2 compat</span>
+          <span class="tab-hint">native API + /v1 compatibility</span>
         </fieldset>
         <pre class="code-body" aria-live="polite"><code v-html="code[active]" /></pre>
       </div>

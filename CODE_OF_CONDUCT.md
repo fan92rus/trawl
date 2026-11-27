@@ -32,7 +32,7 @@ Community leaders have the right and responsibility to remove, edit, or reject c
 
 ## Scope
 
-This Code of Conduct applies within all community spaces — the GitHub repository, issue tracker, pull requests, discussions, and any other channel associated with the project. It also applies when an individual is officially representing the community in public spaces.
+This Code of Conduct applies within all community spaces - the GitHub repository, issue tracker, pull requests, discussions, and any other channel associated with the project. It also applies when an individual is officially representing the community in public spaces.
 
 ## Enforcement
 

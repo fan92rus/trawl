@@ -21,6 +21,8 @@ cp .env.example .env
 ```
 
 Everything has a working default. See [Configuration](/getting-started/configuration) for the full reference.
+For occasional use, follow the optional [low-resource setup](/getting-started/low-resource)
+to defer Firefox startup and retire it after inactivity.
 
 ## 3. Start everything
 
@@ -30,25 +32,25 @@ docker compose up -d
 
 This starts two containers:
 
-| Container | Purpose                 | Port     |
-| --------- | ----------------------- | -------- |
-| `redis`   | Session cache backend   | internal |
+| Container | Purpose                                       | Port       |
+| --------- | --------------------------------------------- | ---------- |
+| `redis`   | Session cache backend                         | internal   |
 | `trawl`   | Browser pool, API, and optional forward proxy | 8191, 8192 |
 
-The API takes **15–30 seconds** to launch and warm the browser pool. Watch progress:
+The API takes **15-30 seconds** to launch and warm the browser pool. Watch progress:
 
 ```bash
-docker compose logs -f api
+docker compose logs -f trawl
 ```
 
 You'll see:
 ```
-[api] TRAWL starting on :8191  (pool: 3 browsers)
+[api] TRAWL starting on :8191  (pool: 1 browser)
 [api] session cache connected  (Tier 2 fast-path enabled)
 [pool] browser 1/3 ready
 [pool] browser 2/3 ready
 [pool] browser 3/3 ready
-[api] ready — all 3 browsers warm
+[api] ready - all 3 browsers warm
 ```
 
 ## 4. Verify it works
@@ -98,7 +100,7 @@ saved session remains valid.
 
 ## 6. Use the native API (optional)
 
-The `/scrape` endpoint returns a richer response than `/v1` — includes `tier`, `timings`, `sessionCached`, and more:
+The `/scrape` endpoint returns a richer response than `/v1` - includes `tier`, `timings`, `sessionCached`, and more:
 
 ```bash
 curl -s -X POST http://localhost:8191/scrape \
@@ -116,13 +118,16 @@ http://localhost:8191
 
 Done. No other configuration changes are needed. TRAWL implements the FlareSolverr v2 API exactly.
 
+This uses the API on port `8191`. Do not configure port `8192` here: that is the separate,
+optional HTTP/HTTPS forward proxy and it is disabled by default.
+
 ---
 
 ## What's running
 
 ```
 localhost:8191  →  TRAWL API  (FlareSolverr-compatible + native endpoint)
-localhost:8192  →  HTTP/HTTPS forward proxy (when MITM_PROXY_ENABLED=true)
+localhost:8192  →  HTTP/HTTPS forward proxy (when MITM_ENABLED=true)
 ```
 
 To stop everything:

@@ -1,1 +1,6 @@
+# Keep LF endings in the repository. The explicit rules below also survive
+# core.autocrlf=true on Windows checkouts, where `sh build.sh` would otherwise
+# fail with "set: illegal option -".
 * text=auto eol=lf
+*.sh text eol=lf
+Dockerfile* text eol=lf

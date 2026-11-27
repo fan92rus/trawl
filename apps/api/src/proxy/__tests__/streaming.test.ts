@@ -1,14 +1,16 @@
 import { describe, expect, test } from "bun:test"
-import { STREAM_THRESHOLD, shouldStream } from "../streaming"
+import { STREAM_THRESHOLD_BYTES, shouldStream } from "../streaming"
 
 describe("shouldStream", () => {
   describe("size threshold", () => {
     test("streams responses >= 8 MiB", () => {
-      expect(shouldStream("https://example.com/file.bin", STREAM_THRESHOLD, "application/octet-stream")).toMatchObject({
+      expect(
+        shouldStream("https://example.com/file.bin", STREAM_THRESHOLD_BYTES, "application/octet-stream"),
+      ).toMatchObject({
         stream: true,
         reason: "size-threshold",
       })
-      expect(shouldStream("https://example.com/file.bin", STREAM_THRESHOLD + 1, "text/plain")).toMatchObject({
+      expect(shouldStream("https://example.com/file.bin", STREAM_THRESHOLD_BYTES + 1, "text/plain")).toMatchObject({
         stream: true,
         reason: "size-threshold",
       })
@@ -92,7 +94,7 @@ describe("shouldStream", () => {
 
     test("empty content-type with explicit length → size decides", () => {
       expect(shouldStream("https://example.com/", 100, "").stream).toBe(false)
-      expect(shouldStream("https://example.com/", STREAM_THRESHOLD + 1, "").stream).toBe(true)
+      expect(shouldStream("https://example.com/", STREAM_THRESHOLD_BYTES + 1, "").stream).toBe(true)
     })
 
     test("content-type with charset parameter is parsed correctly", () => {

@@ -1,3 +1,6 @@
+import { parseHTML } from "linkedom"
+import { detectAnubisPage } from "./anubis"
+
 export type ChallengeType =
   | "cloudflare-interstitial"
   | "cloudflare-turnstile"
@@ -9,7 +12,17 @@ export type ChallengeType =
   | "ddos-guard"
   | "aws-waf"
   | "datadome"
+  | "duckduckgo"
+  | "anubis"
+  | "altcha"
+  | "friendly-captcha"
+  | "shumei"
+  | "baxia"
   | "none"
+
+export function isCloudflareErrorUrl(url: string): boolean {
+  return /\/cdn-cgi\/error\/|error=1020|error=1015/.test(url)
+}
 
 export function hasCloudflareChallengeHeader(headers: Record<string, string> = {}): boolean {
   const cfMitigated = Object.entries(headers).find(([name]) => name.toLowerCase() === "cf-mitigated")?.[1]
@@ -32,42 +45,93 @@ export function getAwsWafAction(
   return undefined
 }
 
+const CLOUDFLARE_CHALLENGE_MARKERS = /_cf_chl_opt|orchestrate\/chl_page/i
+
+function htmlAttribute(element: Element, name: string): string | undefined {
+  for (const attribute of element.attributes) {
+    if (attribute.name.toLowerCase() === name) return attribute.value
+  }
+}
+
+function isActiveElement(element: Element): boolean {
+  return !element.closest("template,noscript,textarea,style")
+}
+
+function isActiveScript(script: Element): boolean {
+  const type = htmlAttribute(script, "type")?.trim().toLowerCase()
+  return isActiveElement(script) && (!type || /^(?:module|(?:text|application)\/(?:java|ecma)script)$/.test(type))
+}
+
+function hasCloudflareChallengeScript(html: string, document?: Document): boolean {
+  if (!CLOUDFLARE_CHALLENGE_MARKERS.test(html)) return false
+  const root = document ?? parseHTML(html).document
+  return [...root.querySelectorAll("script")].some((script) => {
+    if (!isActiveScript(script)) return false
+    return (
+      /\/cdn-cgi\/challenge-platform\/.*orchestrate\/chl_page/i.test(htmlAttribute(script, "src") ?? "") ||
+      /(?:^|[;{}])\s*(?:window\.)?_cf_chl_opt\s*=\s*\{/i.test(script.textContent ?? "")
+    )
+  })
+}
+
+export function isExplicitChallengeRejection(status: number, html: string, headers: Record<string, string>): boolean {
+  return (
+    hasCloudflareChallengeHeader(headers) ||
+    getAwsWafAction(status, headers) === "challenge" ||
+    detectAnubisPage(html) === "challenge" ||
+    ((status === 403 || status === 503) && hasCloudflareChallengeScript(html))
+  )
+}
+
+export const isCloudflareChallengeTitle = (title: string): boolean =>
+  /^(?:just a moment|please wait|checking your browser(?: before accessing .*)?|attention required|verify you are human)[.!…]*(?:\s*[|-]\s*cloudflare)?$/i.test(
+    title.trim(),
+  )
+
 export function isCloudflarePage(html: string, headers: Record<string, string>): boolean {
   if (hasCloudflareChallengeHeader(headers)) return true
   if (hasDdosGuardChallenge(html)) return false
-  if (/<title>[^<]*(just a moment|please wait|checking|attention required)[^<]*<\/title>/i.test(html)) return true
-  if (/checking your browser/i.test(html)) return true
-  if (/enable javascript and cookies to continue/i.test(html)) return true
-  if (/verify you are human/i.test(html)) return true
-  // id-based checks: specific to CF challenge DOM, not present in real pages
-  if (/id="challenge-running"/i.test(html)) return true
-  if (/id="cf-challenge-running"/i.test(html)) return true
-  // CF Turnstile interstitial wrapper
-  if (/id="turnstile-wrapper"/i.test(html)) return true
-  // Active challenge orchestration markers. Unlike the passive telemetry markers
-  // below, these only occur while Cloudflare is serving an interstitial.
-  if (/_cf_chl_opt/i.test(html)) return true
-  if (/id=["']challenge-form["']/i.test(html)) return true
-  if (/orchestrate\/chl_page/i.test(html)) return true
-  // CF firewall/WAF deny page (error 1020 and friends) — static "blocked" page, not a
-  // solvable JS challenge, but still needs to be recognized as CF so the orchestrator
-  // reports tier failure and escalates instead of returning the block page as content
-  if (/id="cf-error-details"/i.test(html)) return true
-  if (/you have been blocked/i.test(html)) return true
-  // Lean CF challenge stub — blank title/body, just the challenge-platform bootstrap
+  if (hasDuckDuckGoChallenge(html) || hasAnubisChallenge(html)) return false
+  if (hasAltcha(html) || hasFriendlyCaptcha(html)) return false
+  if (
+    !CLOUDFLARE_CHALLENGE_MARKERS.test(html) &&
+    !/just a moment|please wait|checking your browser|attention required|verify you are human|(?:cf-)?challenge-running|turnstile-wrapper|challenge-form|cf-error-details|__CF\$cv\$params|\/cdn-cgi\/challenge-platform\//i.test(
+      html,
+    )
+  )
+    return false
+  const { document } = parseHTML(html)
+  const title = [...document.querySelectorAll("title")].find(isActiveElement)?.textContent?.trim() ?? ""
+  if (isCloudflareChallengeTitle(title)) return true
+  if (hasCloudflareChallengeScript(html, document)) return true
+  for (const element of document.querySelectorAll("*")) {
+    if (
+      /^(?:challenge-running|cf-challenge-running|turnstile-wrapper|challenge-form|cf-error-details)$/i.test(
+        htmlAttribute(element, "id") ?? "",
+      ) &&
+      isActiveElement(element)
+    )
+      return true
+  }
+  // Lean CF challenge stub - blank title/body, just the challenge-platform bootstrap
   // script. No human-readable text at all, so none of the checks above catch it.
   //
-  // CAUTION: __CF$cv$params is NOT exclusive to active challenges — Cloudflare injects
+  // CAUTION: __CF$cv$params is NOT exclusive to active challenges - Cloudflare injects
   // the same bootstrap into countless ordinary, fully-rendered pages as passive
   // bot-management telemetry. Matching on the marker alone flags real pages as blocked.
   // The actual challenge stub is always near-empty (nothing else can render before the
   // challenge resolves), so gate on page size too.
-  if (html.length < 3000 && /__CF\$cv\$params|\/cdn-cgi\/challenge-platform\/[^"']*jsd\/main\.js/i.test(html))
-    return true
+  if (html.length < 3000)
+    return [...document.querySelectorAll("script")].some(
+      (script) =>
+        isActiveScript(script) &&
+        (/__CF\$cv\$params/.test(script.textContent ?? "") ||
+          /\/cdn-cgi\/challenge-platform\/[^"']*jsd\/main\.js/i.test(htmlAttribute(script, "src") ?? "")),
+    )
   return false
 }
 
-// Firefox's own internal about:neterror / about:certerror page — means the browser never
+// Firefox's own internal about:neterror / about:certerror page - means the browser never
 // reached a real server at all (DNS failure, connection refused, TLS error, etc). Distinct
 // from a Cloudflare/WAF block: there's no origin response to retry against, so callers
 // should treat this the same as a hard network failure, not as scraped content.
@@ -79,37 +143,155 @@ export function isBrowserErrorPage(html: string): boolean {
 }
 
 export function hasTurnstile(html: string): boolean {
-  return (
-    /class="cf-turnstile"/i.test(html) ||
-    /challenges\.cloudflare\.com\/turnstile/i.test(html) ||
-    /cdn-cgi\/challenge-platform[^"']*turnstile/i.test(html)
-  )
+  if (!/cf-turnstile|challenges\.cloudflare\.com\/turnstile|cdn-cgi\/challenge-platform[^"']*turnstile/i.test(html))
+    return false
+  const { document } = parseHTML(html)
+  for (const element of document.querySelectorAll("*")) {
+    if (!isActiveElement(element)) continue
+    if (/(?:^|\s)cf-turnstile(?:\s|$)/.test(htmlAttribute(element, "class") ?? "")) return true
+    if (element.localName !== "script" && element.localName !== "iframe") continue
+    if (element.localName === "script" && !isActiveScript(element)) continue
+    try {
+      const url = new URL(htmlAttribute(element, "src") ?? "", "https://example.test/")
+      if (
+        /^https?:$/.test(url.protocol) &&
+        ((url.hostname === "challenges.cloudflare.com" && url.pathname.startsWith("/turnstile/")) ||
+          /^\/cdn-cgi\/challenge-platform\/.*turnstile/i.test(url.pathname))
+      )
+        return true
+    } catch {
+      // Malformed references do not establish the presence of a widget.
+    }
+  }
+  return false
 }
 
 export function hasHcaptcha(html: string): boolean {
   return /class="h-captcha"|hcaptcha\.com\/1\/api/i.test(html)
 }
 
+const RECAPTCHA_SCRIPT = /(?:google\.com|recaptcha\.net)\/recaptcha\/(?:api|enterprise)\.js(?:\?[^"'\s<>]*)?/gi
+const RECAPTCHA_V2_SHELL = /class\s*=\s*["'][^"']*\bg-recaptcha\b|recaptcha\/(?:api2|enterprise)\/(?:anchor|bframe)/i
+
 export function hasRecaptcha(html: string): boolean {
-  return /class="g-recaptcha"|google\.com\/recaptcha|recaptcha\.net\/recaptcha/i.test(html)
+  if (RECAPTCHA_V2_SHELL.test(html)) return true
+  for (const [script] of html.matchAll(RECAPTCHA_SCRIPT)) {
+    // A site key selects v3; explicit/onload are v2 modes, even without static markup.
+    const render = /[?&](?:amp;)?render=([^&]*)/i.exec(script)?.[1]
+    if (!render || /^(?:explicit|onload)$/i.test(render)) return true
+  }
+  return false
 }
 
 export function hasCapChallenge(html: string): boolean {
-  return /cap-widget|trycap\.dev|data-cap-/i.test(html)
+  return /<cap-widget(?=[\s/>])/i.test(html)
 }
 
-// Imperva/Incapsula WAF challenge — sensor-based (reese84, current) or legacy (___utmvc).
-// Both are produced by an obfuscated in-page JS challenge; no need to understand the
-// obfuscation, just detect the challenge page and wait for the sensor cookie (see impervaWait.ts).
-export function hasImpervaChallenge(html: string, headers: Record<string, string> = {}): boolean {
-  const lowerHeaders: Record<string, string> = {}
-  for (const [k, v] of Object.entries(headers)) lowerHeaders[k.toLowerCase()] = v
-  if (lowerHeaders["x-iinfo"]) return true
-  if (/incapsula/i.test(lowerHeaders["x-cdn"] ?? "")) return true
-  if (/incapsula incident id/i.test(html)) return true
-  if (/_incapsula_resource/i.test(html)) return true
-  if (/visid_incap_|incap_ses_|nlbi_|reese84|___utmvc/i.test(html)) return true
-  return false
+// ALTCHA is a Web Component. Restrict static detection to the component, its
+// generated form field, or its widget script; the brand name and generic PoW
+// wording also occur in ordinary articles and integration documentation.
+export function hasAltcha(html: string): boolean {
+  return (
+    /<altcha-widget\b/i.test(html) ||
+    /<input\b[^>]*\bname\s*=\s*["']altcha["']/i.test(html) ||
+    /<script\b[^>]*\baltcha(?:[-_]widget)?(?:\.min)?\.[cm]?js\b/i.test(html)
+  )
+}
+
+// Friendly Captcha v1/v2 mount under .frc-captcha and publish one of these two
+// managed form fields. A provider iframe is only meaningful when its URL is a
+// widget path; a bare friendlycaptcha/frcapi mention is not enough.
+export function hasFriendlyCaptcha(html: string): boolean {
+  if (/<[^>]+\bclass\s*=\s*["'][^"']*\bfrc-captcha\b[^"']*["']/i.test(html)) return true
+  if (/<input\b[^>]*\bname\s*=\s*["']frc-captcha-(?:solution|response)["']/i.test(html)) return true
+  return /<iframe\b[^>]*\bsrc\s*=\s*["'][^"']*(?:frcapi\.com|friendlycaptcha\.[^/"']+)[^"']*\/(?:captcha\/)?widget\b/i.test(
+    html,
+  )
+}
+
+// Alibaba Baxia answers a flagged request with HTTP 200, a `bxpunish: 1` header and a short stub that
+// sends the browser to `.../_____tmd_____/punish` (the NC slider) or its login jump. The status
+// is 200 and the body is tiny, so nothing else here would call it a wall. The header alone is not
+// enough: it must come with the stub's own markers. A long page that merely mentions the path
+// (documentation, a blog post) is not a punish response.
+export function hasBaxiaPunish(html: string, headers: Record<string, string> = {}): boolean {
+  // The stub is a few KB. Real pages can mention these words in their own scripts.
+  if (html.length >= 20_000) return false
+  // With the header, the stub's own path is the only marker: words like x5referer can sit in
+  // an ordinary short page's scripts, and the header comes from the first response, so it is
+  // still in hand after a passed slide has landed on real content.
+  if (headerValue(headers, "bxpunish") === "1") return html.includes("_____tmd_____")
+  return /_____tmd_____\/punish\?x5secdata=/.test(html)
+}
+
+export function hasShumei(html: string): boolean {
+  if (!/shumei_captcha_wrapper|smCaptcha|sm-captcha|smcp|initSMCaptcha/i.test(html)) return false
+  const { document } = parseHTML(html)
+  return (
+    [...document.querySelectorAll(".shumei_captcha_wrapper, .smCaptcha, .sm-captcha")].some(isActiveElement) ||
+    [...document.querySelectorAll("script")].some(
+      (script) =>
+        isActiveScript(script) &&
+        (/\/smcp(?:\.min)?\.js(?:[?#]|$)/i.test(htmlAttribute(script, "src") ?? "") ||
+          /\binitSMCaptcha\s*\(/.test(script.textContent ?? "")),
+    )
+  )
+}
+
+// CDN identity and cookie names can appear on ordinary pages and in documentation.
+// Require an active resource frame, a sensor-only shell, or an Imperva error response.
+export function hasImpervaChallenge(html: string, headers: Record<string, string> = {}, status?: number): boolean {
+  const fromImperva = Boolean(headerValue(headers, "x-iinfo")) || /incapsula/i.test(headerValue(headers, "x-cdn") ?? "")
+  if (fromImperva && (status === 403 || status === 429 || status === 503)) return true
+  if (
+    /<title[^>]*>\s*Pardon Our Interruption\s*<\/title>/i.test(html) &&
+    /something about your browser made us think you were a bot|pardon our interruption[^<]*imperva/i.test(html)
+  )
+    return true
+  if (!/_incapsula_resource|reese84|___utmvc|visid_incap_|incap_ses_|nlbi_|incapsula incident id/i.test(html))
+    return false
+
+  const { document } = parseHTML(html)
+  const isResource = (src: string | undefined): boolean => {
+    if (!src) return false
+    try {
+      const url = new URL(src, "https://example.test/")
+      return /^https?:$/.test(url.protocol) && /(?:^|\/)_incapsula_resource(?:\/|$)/i.test(url.pathname)
+    } catch {
+      return false
+    }
+  }
+  const isActive = (element: Element): boolean => !element.closest("template, noscript")
+  for (const frame of document.querySelectorAll("iframe")) {
+    if (isActive(frame) && isResource(htmlAttribute(frame, "src"))) return true
+  }
+
+  if (
+    /^(?:request unsuccessful|access denied)\b/i.test((document.querySelector("title")?.textContent ?? "").trim()) &&
+    /incapsula incident id\s*:\s*\d/i.test(document.querySelector("body")?.textContent ?? "")
+  )
+    return true
+
+  const scripts = [...document.querySelectorAll("script")].filter((script) => {
+    const type = htmlAttribute(script, "type")?.trim().toLowerCase()
+    return isActive(script) && (!type || /^(?:module|(?:text|application)\/(?:java|ecma)script)$/.test(type))
+  })
+  const hasSensor = scripts.some((script) => {
+    if (isResource(htmlAttribute(script, "src"))) return true
+    const code = script.textContent ?? ""
+    return (
+      /\b(?:window\.)?reese84\s*=/i.test(code) ||
+      (/\bdocument\.cookie\s*=/i.test(code) && /reese84|___utmvc|visid_incap_|incap_ses_|nlbi_/i.test(code))
+    )
+  })
+  if (!hasSensor) return false
+  if (hasChallengeWallMarkers(html)) return true
+
+  // Script size varies with obfuscation; visible content distinguishes a bootstrap
+  // from an article that carries a passive sensor. Never execute the parsed scripts.
+  for (const element of document.querySelectorAll("head, script, style, template, noscript")) element.remove()
+  const text = document.documentElement?.textContent ?? ""
+  return text.replace(/\s+/g, " ").trim().length < 200
 }
 
 // Akamai Bot Manager "Behavioral Detection" (sec-cpt / SBSD) interstitial. Akamai
@@ -117,7 +299,7 @@ export function hasImpervaChallenge(html: string, headers: Record<string, string
 // (the "behavioral-content" widget, often a press-and-hold button) plus an obfuscated
 // sensor script; once the sensor's XHR posts telemetry the page location.reload()s
 // into the real content. trawl solves this by driving human-like interaction and
-// waiting for the reload — see akamaiWait.ts. These DOM markers are challenge-only
+// waiting for the reload - see akamaiWait.ts. These DOM markers are challenge-only
 // (the class/id names don't appear on ordinary Akamai-fronted pages), so no size gate
 // is needed for them; the sensor-bootstrap fallback IS size-gated to avoid flagging
 // full pages that merely carry passive Akamai telemetry.
@@ -139,7 +321,28 @@ export function hasDdosGuardChallenge(html: string, _headers: Record<string, str
   return false
 }
 
-// AWS WAF JavaScript challenge — the interstitial page that loads challenge.js to
+// DuckDuckGo's anomaly wall is an interactive image CAPTCHA. Require either its
+// provider-owned endpoint or all of the structural fallback markers: each generic
+// marker can occur independently in application pages and test fixtures.
+export function hasDuckDuckGoChallenge(html: string, _headers: Record<string, string> = {}): boolean {
+  const providerEndpoint = /(?:action|src)=["'](?:https?:)?\/\/(?:html\.)?duckduckgo\.com\/anomaly\.js(?:[?"'])/i.test(
+    html,
+  )
+  if (providerEndpoint) return true
+
+  const anomalyEndpoint = /(?:action|src)=["'][^"']*\/anomaly\.js(?:[?"'])/i.test(html)
+  const challengeForm = /id=["']challenge-form["']/i.test(html)
+  const anomalyModal =
+    /data-testid=["']anomaly-modal["']/i.test(html) || /class=["'][^"']*\banomaly-modal(?:\b|__)/i.test(html)
+  return anomalyEndpoint && challengeForm && anomalyModal
+}
+
+// Anubis walls can return HTTP 200; inspect their challenge payload rather than status.
+export function hasAnubisChallenge(html: string): boolean {
+  return detectAnubisPage(html) !== undefined
+}
+
+// AWS WAF JavaScript challenge - the interstitial page that loads challenge.js to
 // issue an aws-waf-token cookie before redirecting to the protected resource.
 export function hasAwsWafChallenge(html: string, headers: Record<string, string> = {}, status?: number): boolean {
   if (getAwsWafAction(status, headers) === "challenge") return true
@@ -220,12 +423,18 @@ export function detectChallengeType(
   if (hasDataDomeChallenge(html, headers, status)) return "datadome"
   if (hasTurnstile(html)) return "cloudflare-turnstile"
   if (hasDdosGuardChallenge(html, headers)) return "ddos-guard"
+  if (hasDuckDuckGoChallenge(html, headers)) return "duckduckgo"
+  if (hasAnubisChallenge(html)) return "anubis"
+  if (hasAltcha(html)) return "altcha"
+  if (hasFriendlyCaptcha(html)) return "friendly-captcha"
   if (isCloudflarePage(html, headers)) return "cloudflare-interstitial"
-  if (hasImpervaChallenge(html, headers)) return "imperva"
+  if (hasImpervaChallenge(html, headers, status)) return "imperva"
   if (hasAkamaiChallenge(html, headers)) return "akamai"
   if (hasHcaptcha(html)) return "hcaptcha"
   if (hasRecaptcha(html)) return "recaptcha"
   if (hasCapChallenge(html)) return "cap"
+  if (hasShumei(html)) return "shumei"
+  if (hasBaxiaPunish(html, headers)) return "baxia"
   return "none"
 }
 
@@ -236,6 +445,8 @@ export function isBlocked(status: number, html: string): boolean {
   if (hasAkamaiChallenge(html)) return true
   if (hasDdosGuardChallenge(html)) return true
   if (hasDataDomeChallenge(html)) return true
+  if (hasDuckDuckGoChallenge(html)) return true
+  if (hasAnubisChallenge(html)) return true
   return false
 }
 
@@ -245,7 +456,14 @@ export function needsJs(html: string, headers: Record<string, string>): boolean 
     hasImpervaChallenge(html, headers) ||
     hasAkamaiChallenge(html, headers) ||
     hasDdosGuardChallenge(html, headers) ||
-    hasDataDomeChallenge(html, headers)
+    hasDataDomeChallenge(html, headers) ||
+    hasDuckDuckGoChallenge(html, headers) ||
+    hasAnubisChallenge(html) ||
+    hasAltcha(html) ||
+    hasFriendlyCaptcha(html) ||
+    hasCapChallenge(html) ||
+    hasShumei(html) ||
+    hasBaxiaPunish(html, headers)
   )
 }
 
@@ -259,16 +477,44 @@ const LEAN_BODY_THRESHOLDS: Partial<Record<ChallengeType, number>> = {
   "ddos-guard": 3000,
 }
 
+export function hasChallengeWallMarkers(html: string): boolean {
+  if (
+    /<title\b[^>]*>(?:[^<]*[-|\u2013\u2014:]\s*)?(?:captcha|challenge|security\s*check|human\s*verification|bot\s*verification|just\s*a\s*moment|attention\s*required)\b/i.test(
+      html,
+    )
+  ) {
+    return true
+  }
+  if (/(?:enable\s+javascript|javascript\s+is\s+required)\s+to\s+complete\s+this\s+challenge/i.test(html)) {
+    return true
+  }
+  return false
+}
+
 // True if the response is a challenge wall (page access blocked) rather than a page
 // that happens to contain a captcha widget. 4xx/5xx is HTTP-standard; the lean-stub
-// checks are TRAWL-specific heuristics (CF's auto-resolving bootstrap and Imperva's
-// sensor cookie challenge can come at 200 with body < a few KB).
-export function isChallengeWall(status: number, bodyLength: number, challengeType: ChallengeType): boolean {
+// checks and interstitial markers are TRAWL-specific heuristics (CF's auto-resolving
+// bootstrap, Imperva's sensor cookie, and dynamic PoW challenge pages like Mojeek can
+// arrive at 200).
+export function isChallengeWall(
+  status: number,
+  bodyLength: number,
+  challengeType: ChallengeType,
+  html?: string,
+): boolean {
   if (challengeType === "none") return false
-  if (status === 403 || status === 503) return true
-  // These three never serve real content alongside their wall, so the type alone settles
+  if (status === 403 || status === 429 || status === 503) return true
+  // These five never serve real content alongside their wall, so the type alone settles
   // it. For datadome that leans on the header invariant documented in getDataDomeAction().
-  if (challengeType === "akamai" || challengeType === "aws-waf" || challengeType === "datadome") return true
+  if (
+    challengeType === "akamai" ||
+    challengeType === "aws-waf" ||
+    challengeType === "datadome" ||
+    challengeType === "duckduckgo" ||
+    challengeType === "anubis"
+  )
+    return true
+  if (html && hasChallengeWallMarkers(html)) return true
   const threshold = LEAN_BODY_THRESHOLDS[challengeType]
   if (threshold !== undefined && bodyLength < threshold) return true
   return false

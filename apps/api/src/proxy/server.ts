@@ -5,28 +5,39 @@ import {
   type OrchestratorDeps,
   proxySanitizeHeaders,
   RESPONSE_HOP_BY_HOP_HEADERS,
+  ScrapeError,
   scrape,
 } from "@trawl/tiers"
-import { userCookiesForHost } from "../config"
-import { log } from "../logger"
+import { withUserCookies } from "../config"
+import { log, safeUrl } from "../logger"
+import { metrics } from "../metrics"
+import { runLoggedScrape } from "../requestLogging"
 import { handleBrowserLogin, parseLoginFormData } from "./browserLogin"
 import { MitmCa } from "./ca"
-import { ChallengeCache } from "./challengeCache"
-import { directForwardHttp, directForwardHttps, type ForwardResult } from "./directForward"
+import { ChallengeCache, type ChallengeMode } from "./challengeCache"
+import {
+  directForwardHttp,
+  directForwardHttps,
+  type ForwardResult,
+  type ForwardResultBuffered,
+  type ForwardResultStream,
+} from "./directForward"
 import {
   writeResponse,
   writeResponseFromBuffer,
   writeResponseFromBufferMulti,
   writeResponseFromStream,
 } from "./httpResponse"
-import { responseFromScrapeResult } from "./responsePolicy"
+import { registerLocalProxy } from "./localTrust"
+import { responseFromBlockedEvidence, responseFromScrapeResult } from "./responsePolicy"
 
 // General forward proxy with browser-backed challenge escalation. HTTPS is
 // MITM-terminated, so expose it only to clients that trust this instance's CA.
 
 const MAX_HEADER_BYTES = 64 * 1024
 
-const challengeCache = new ChallengeCache({ ttlMs: 5 * 60 * 1000 })
+export const shouldBypassTier0 = (alwaysScrape: boolean | undefined, cachedMode: ChallengeMode | undefined): boolean =>
+  alwaysScrape === true || cachedMode === "cf"
 
 export interface MitmProxyOptions {
   port: number
@@ -35,6 +46,8 @@ export interface MitmProxyOptions {
   host: string
   maxTier?: 1 | 2 | 3 | 4
   maxTimeout?: number
+  alwaysScrape?: boolean
+  escalate429?: boolean
   debug?: boolean
   // Domains whose rendered HTML is re-encoded to windows-1251 (see responsePolicy).
   cp1251Hosts?: ReadonlySet<string>
@@ -44,13 +57,17 @@ export interface MitmProxyHandle {
   ca: MitmCa
   server: net.Server
   tlsServers: tls.Server[]
+  unregisterTrust: () => void
 }
 
-export function startMitmProxy(opts: MitmProxyOptions): MitmProxyHandle {
+type ProxyOptions = MitmProxyOptions & { challengeCache: ChallengeCache }
+
+export function startMitmProxy(options: MitmProxyOptions): MitmProxyHandle {
+  const opts: ProxyOptions = { ...options, challengeCache: new ChallengeCache({ ttlMs: 5 * 60 * 1000 }) }
   const ca = new MitmCa(opts.caDir)
 
   // Per-host loopback TLS terminators. We know the target host from the CONNECT line, so
-  // each host gets its own real listening TLS server whose base cert is that host's leaf —
+  // each host gets its own real listening TLS server whose base cert is that host's leaf -
   // no SNI routing needed (Bun's node:tls doesn't invoke SNICallback, and can't drive a
   // handshake via emit("connection"), so a real listening server per host is the reliable
   // path). On CONNECT we bridge the raw client socket to the matching server's loopback
@@ -82,31 +99,48 @@ export function startMitmProxy(opts: MitmProxyOptions): MitmProxyHandle {
   }
 
   const server = net.createServer((clientSocket) => {
-    clientSocket.once("data", (first) => {
-      const firstLine = first.toString("latin1").split("\r\n", 1)[0] ?? ""
+    const chunks: Buffer[] = []
+    let total = 0
+    const onData = (chunk: Buffer) => {
+      chunks.push(chunk)
+      total += chunk.length
+      const first = Buffer.concat(chunks, total)
+      const headerEnd = first.indexOf("\r\n\r\n")
+      if (headerEnd < 0) {
+        if (total > MAX_HEADER_BYTES) clientSocket.destroy()
+        return
+      }
+      clientSocket.off("data", onData)
+      if (headerEnd + 4 > MAX_HEADER_BYTES) {
+        clientSocket.destroy()
+        return
+      }
+      const firstLine = first.subarray(0, headerEnd).toString("latin1").split("\r\n", 1)[0] ?? ""
       const [method, target] = firstLine.split(" ")
 
       if (method === "CONNECT") {
-        void handleConnect(clientSocket, target ?? "", tlsPortFor)
+        void handleConnect(clientSocket, target ?? "", tlsPortFor, first.subarray(headerEnd + 4))
       } else {
-        const initial = Buffer.isBuffer(first) ? first : Buffer.from(first)
-        handlePlainHttp(clientSocket, initial, opts).catch(() => clientSocket.destroy())
+        handlePlainHttp(clientSocket, first, opts).catch(() => clientSocket.destroy())
       }
-    })
+    }
+    clientSocket.on("data", onData)
     clientSocket.on("error", () => clientSocket.destroy())
   })
 
   server.on("error", (err) => log.proxy.error({ err }, "server error"))
   server.listen(opts.port, opts.host, () => {
-    log.proxy.info({ host: opts.host, port: opts.port, caPath: ca.caCertPath }, "MITM forward proxy listening")
+    console.log(`[proxy] MITM forward proxy on ${opts.host}:${opts.port}  (CA: ${ca.caCertPath})`)
   })
 
-  return { ca, server, tlsServers }
+  const unregisterTrust = registerLocalProxy({ server, configuredPort: opts.port, ca: ca.caCertPem })
+  return { ca, server, tlsServers, unregisterTrust }
 }
 
-// Graceful shutdown — stops accepting new connections and closes existing ones.
+// Graceful shutdown - stops accepting new connections and closes existing ones.
 // Called from lifecycle.ts on SIGTERM/SIGINT before the browser pool shutdown.
 export async function shutdownMitmProxy(handle: MitmProxyHandle, timeoutMs = 5_000): Promise<void> {
+  handle.unregisterTrust()
   const serverClosed = new Promise<void>((resolve) => {
     if (!handle.server.listening) {
       resolve()
@@ -125,12 +159,13 @@ export async function shutdownMitmProxy(handle: MitmProxyHandle, timeoutMs = 5_0
 }
 
 // CONNECT host:port → 200, then bridge the raw client socket to the host's loopback TLS
-// terminator. We pause first because reading the CONNECT line left the socket flowing —
+// terminator. We pause first because reading the CONNECT line left the socket flowing -
 // pipe() resumes it once the bridge is wired, so the client's ClientHello isn't dropped.
 async function handleConnect(
   clientSocket: net.Socket,
   target: string,
   tlsPortFor: (host: string) => Promise<number>,
+  initial: Buffer,
 ): Promise<void> {
   const host = target.split(":")[0] ?? ""
   if (!host) {
@@ -147,19 +182,22 @@ async function handleConnect(
   }
   clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n", () => {
     const upstream = net.connect(port, "127.0.0.1", () => {
+      if (initial.length) upstream.write(initial)
       clientSocket.pipe(upstream)
       upstream.pipe(clientSocket)
     })
     upstream.on("error", () => clientSocket.destroy())
     clientSocket.on("error", () => upstream.destroy())
+    clientSocket.once("close", () => upstream.destroy())
+    upstream.once("close", () => clientSocket.end())
   })
 }
 
 // Read one HTTP/1.1 request off the decrypted stream, re-issue it through the browser,
 // and write the solved response back. We answer one request per TLS connection and close
-// (Connection: close) — clients open a fresh CONNECT per request, which keeps parsing
+// (Connection: close) - clients open a fresh CONNECT per request, which keeps parsing
 // trivial and lets each request pick up the freshest cached session.
-function serveRequests(stream: tls.TLSSocket, host: string, opts: MitmProxyOptions): void {
+function serveRequests(stream: tls.TLSSocket, host: string, opts: ProxyOptions): void {
   const chunks: Buffer[] = []
   let total = 0
 
@@ -185,7 +223,7 @@ function serveRequests(stream: tls.TLSSocket, host: string, opts: MitmProxyOptio
     if (contentLength > 0 && bodyAvailable < contentLength) return // wait for full body
 
     stream.off("data", onData)
-    // Raw body bytes — UTF-8 decoding would corrupt binary uploads (PDFs, .torrent
+    // Raw body bytes - UTF-8 decoding would corrupt binary uploads (PDFs, .torrent
     // POSTs, etc.). proxyRequest() forwards them as Buffer.
     const body = contentLength > 0 ? buf.subarray(bodyStart, bodyStart + contentLength) : undefined
     const url = `https://${headers.host ?? host}${path}`
@@ -256,7 +294,7 @@ async function proxyWebSocket(
       upstream.write(`${requestLines.join("\r\n")}\r\n\r\n`)
 
       // Read until end of HTTP response headers (\r\n\r\n). For 101 Switching
-      // Protocols there is no body — once we see the blank line, both sides
+      // Protocols there is no body - once we see the blank line, both sides
       // speak raw WebSocket frames.
       const chunks: Buffer[] = []
       let totalBytes = 0
@@ -275,12 +313,12 @@ async function proxyWebSocket(
         }
         upstream.off("data", onData)
         // Forward the entire response (including any bytes past the header
-        // terminator — rare for 101 but defensive).
+        // terminator - rare for 101 but defensive).
         clientSocket.write(combined.subarray(0, headerEnd + 4))
         if (headerEnd + 4 < combined.length) {
           clientSocket.write(combined.subarray(headerEnd + 4))
         }
-        // Both sides now speak raw WebSocket frames — bidirectional byte pipe.
+        // Both sides now speak raw WebSocket frames - bidirectional byte pipe.
         upstream.pipe(clientSocket)
         clientSocket.pipe(upstream)
         resolve()
@@ -305,7 +343,7 @@ async function proxyWebSocket(
 
 // New request entry point used by serveRequests. Tier 0 = direct TCP/TLS forward
 // to upstream with challenge detection. On challenge, escalate to the existing
-// tier pipeline (`scrape()` from @trawl/tiers — Tier 1 plain HTTP, Tier 2 cached
+// tier pipeline (`scrape()` from @trawl/tiers - Tier 1 plain HTTP, Tier 2 cached
 // browser session, Tier 3 fresh CF solve, Tier 4 residential).
 //
 async function proxyRequest(
@@ -314,8 +352,10 @@ async function proxyRequest(
   method: string,
   clientHeaders: Record<string, string>,
   body: Buffer | undefined,
-  opts: MitmProxyOptions,
+  opts: ProxyOptions,
 ): Promise<void> {
+  const { challengeCache } = opts
+  if (stream.destroyed) return
   let domain: string
   try {
     domain = new URL(url).hostname
@@ -324,10 +364,11 @@ async function proxyRequest(
     return
   }
 
-  // Trust the cache for repeat visits — skip Tier 0 entirely if we recently saw
+  // Trust the cache for repeat visits - skip Tier 0 entirely if we recently saw
   // a CF challenge here and jump straight to scrape().
   const cachedMode = challengeCache.get(domain)
-  if (cachedMode === "cf") {
+  if (shouldBypassTier0(opts.alwaysScrape, cachedMode)) {
+    if (opts.debug && opts.alwaysScrape) console.log(`[proxy] Tier 0 bypassed for ${safeUrl(url)} -> scrape()`)
     return await serveViaScrape(stream, url, method, clientHeaders, body, opts)
   }
 
@@ -337,6 +378,11 @@ async function proxyRequest(
   const sanitized = proxySanitizeHeaders(clientHeaders) ?? {}
   const useHttps = url.startsWith("https://")
   let tier0: ForwardResult
+  const tier0Started = Date.now()
+  metrics.recordTierZeroAttempt()
+  const controller = new AbortController()
+  const disconnect = () => controller.abort()
+  stream.once("close", disconnect)
   try {
     if (useHttps) {
       const parsed = new URL(url)
@@ -348,6 +394,7 @@ async function proxyRequest(
         headers: sanitized,
         body,
         skipChallengeDetection: false,
+        signal: controller.signal,
       })
     } else {
       tier0 = await directForwardHttp({
@@ -356,20 +403,50 @@ async function proxyRequest(
         headers: sanitized,
         body,
         skipChallengeDetection: false,
+        signal: controller.signal,
       })
     }
   } catch (err) {
     tier0 = { mode: "error", error: err instanceof Error ? err : new Error(String(err)) }
+  } finally {
+    stream.off("close", disconnect)
+  }
+  if (stream.destroyed) {
+    if (tier0.mode === "stream") tier0.socket.destroy()
+    return
   }
 
   if (tier0.mode === "error") {
-    if (opts.debug) log.proxy.debug({ url, err: tier0.error.message }, "Tier 0 error")
+    if (opts.debug) console.log(`[proxy] Tier 0 error for ${safeUrl(url)}: ${tier0.error.message}`)
+    if (tier0.requestSent !== false && !["GET", "HEAD", "OPTIONS", "TRACE", "QUERY"].includes(method)) {
+      writeResponseFromBuffer(
+        stream,
+        502,
+        { "content-type": "text/plain; charset=utf-8", "proxy-status": "trawl; error=http_protocol_error" },
+        Buffer.from("Upstream request failed; request was not replayed"),
+        "text/plain; charset=utf-8",
+        method,
+      )
+      return
+    }
     return await serveViaScrape(stream, url, method, clientHeaders, body, opts)
   }
 
+  if (opts.escalate429 && tier0.status === 429 && (tier0.mode === "stream" || !tier0.challengeDetected)) {
+    if (opts.debug) console.log(`[proxy] Tier 0 HTTP 429 for ${safeUrl(url)} -> optional scrape fallback`)
+    // Keep the original response for a failed solve. Rate limiting alone does not
+    // establish a persistent challenge on this host, so do not update its cache.
+    if (tier0.mode === "stream") {
+      tier0.socket.setTimeout(0)
+      stream.once("close", () => tier0.mode === "stream" && tier0.socket.destroy())
+    }
+    return await serveViaScrape(stream, url, method, clientHeaders, body, opts, tier0)
+  }
+
   if (tier0.mode === "stream") {
-    if (opts.debug) log.proxy.debug({ url, status: tier0.status }, "Tier 0 stream")
+    if (opts.debug) console.log(`[proxy] Tier 0 stream for ${safeUrl(url)} -> ${tier0.status}`)
     challengeCache.set(domain, "direct")
+    metrics.record({ source: "proxy", url, durationMs: Date.now() - tier0Started, tier: 0, statusCode: tier0.status })
     writeResponseFromStream(
       stream,
       tier0.status,
@@ -378,46 +455,94 @@ async function proxyRequest(
       tier0.contentType,
       body?.length ?? 0,
       tier0.prefix,
+      method,
     )
     return
   }
 
   if (tier0.challengeDetected) {
-    if (opts.debug) log.proxy.debug({ url }, "Tier 0 challenge — escalating to scrape()")
+    if (opts.debug) console.log(`[proxy] Tier 0 challenge for ${safeUrl(url)} -> escalating to scrape()`)
     challengeCache.set(domain, "cf")
     return await serveViaScrape(stream, url, method, clientHeaders, body, opts)
   }
 
   challengeCache.set(domain, "direct")
-  writeResponseFromBuffer(stream, tier0.status, tier0.headers, tier0.body, tier0.contentType)
+  metrics.record({ source: "proxy", url, durationMs: Date.now() - tier0Started, tier: 0, statusCode: tier0.status })
+  writeResponseFromBuffer(stream, tier0.status, tier0.headers, tier0.body, tier0.contentType, method)
 }
 
 // Tier 1+ fallback: reissue through the existing browser-backed scrape pipeline.
 // Used when Tier 0 detects a challenge, encounters a network error, or sees the
 // domain in challengeCache as "cf".
-async function serveViaScrape(
+function terminalBlockedEvidence(error: ScrapeError) {
+  const evidence = error.blockedEvidence
+  const terminal = error.timings.at(-1)
+  if (
+    !evidence?.html ||
+    !terminal ||
+    terminal.tier !== evidence.tier ||
+    terminal.status !== evidence.status ||
+    terminal.reason !== evidence.reason
+  ) {
+    return undefined
+  }
+  return evidence
+}
+
+function writeOriginalResponse(
+  stream: net.Socket,
+  response: ForwardResultBuffered | ForwardResultStream,
+  requestBodyLength: number,
+  method: string,
+): void {
+  if (response.mode === "buffer") {
+    writeResponseFromBuffer(stream, response.status, response.headers, response.body, response.contentType, method)
+  } else {
+    writeResponseFromStream(
+      stream,
+      response.status,
+      response.headers,
+      response.socket,
+      response.contentType,
+      requestBodyLength,
+      response.prefix,
+      method,
+    )
+    response.socket.resume()
+  }
+}
+
+export async function serveViaScrape(
   stream: net.Socket,
   url: string,
   method: string,
   clientHeaders: Record<string, string>,
   body: Buffer | undefined,
   opts: MitmProxyOptions,
+  rateLimitResponse?: ForwardResultBuffered | ForwardResultStream,
 ): Promise<void> {
+  if (stream.destroyed) {
+    if (rateLimitResponse?.mode === "stream") rateLimitResponse.socket.destroy()
+    return
+  }
+  const controller = new AbortController()
+  const signal = opts.deps.signal ? AbortSignal.any([controller.signal, opts.deps.signal]) : controller.signal
+  const disconnect = () => {
+    controller.abort(new DOMException("Proxy client disconnected", "AbortError"))
+    if (rateLimitResponse?.mode === "stream") rateLimitResponse.socket.destroy()
+  }
+  stream.once("close", disconnect)
   try {
     if (!isValidMethod(method)) {
       writeResponse(stream, 400, Buffer.from(`unsupported method: ${method}`), "text/plain; charset=utf-8")
       return
     }
 
-    // ── Browser-based login interception ─────────────────────────────────────
-    // POST to a login page (e.g. rutracker.org/forum/login.php) cannot go through
-    // the normal scrape() pipeline because CF challenge redirects in the browser
-    // drop the POST body. Instead, we detect login form POSTs, open the login page
-    // in a real browser, fill the form fields, and submit — which survives CF
-    // because the browser sends a genuine POST with cf_clearance already set.
+    // Browser-based login interception: a CF challenge redirects can drop the
+    // POST body of a login form, so submit it from a real browser context instead.
     const loginData = parseLoginFormData(url, method, body?.toString("utf8"))
     if (loginData) {
-      if (opts.debug) log.proxy.debug({ url }, "login form POST detected")
+      if (opts.debug) log.proxy.debug({ url: safeUrl(url) }, "login form POST detected")
       const loginResult = await handleBrowserLogin(url, loginData, opts, opts.deps)
       if (loginResult) {
         writeResponseFromBufferMulti(
@@ -432,7 +557,8 @@ async function serveViaScrape(
       if (opts.debug) log.proxy.debug("login handler returned null, falling through to scrape()")
     }
 
-    const scrapeResult = await scrape(
+    const scrapeResult = await runLoggedScrape(
+      "proxy",
       {
         url,
         method,
@@ -440,53 +566,42 @@ async function serveViaScrape(
         body: body?.toString("utf8"),
         maxTier: opts.maxTier,
         maxTimeout: opts.maxTimeout,
-        // Inject configured per-domain auth cookies (e.g. rutracker bb_session) so
-        // the Cloudflare challenge is solved while logged in.
-        cookies: userCookiesForHost(new URL(url).hostname)?.map((c) => ({
-          name: c.name,
-          value: c.value,
-          domain: c.domain ?? `.${new URL(url).hostname}`,
-          path: c.path ?? "/",
-          expires: -1,
-          httpOnly: false,
-          secure: false,
-        })),
+        // Per-domain auth cookies (USER_COOKIES_JSON, e.g. rutracker bb_session)
+        // must be present before the browser solves a challenge.
+        cookies: withUserCookies(URL.parse(url)?.hostname),
+        blockedEvidence: true,
       },
-      opts.deps,
+      { ...opts.deps, signal, trustedProxyHeaders: true },
+      scrape,
     )
+    if (signal.aborted || stream.destroyed) {
+      if (rateLimitResponse?.mode === "stream") rateLimitResponse.socket.destroy()
+      stream.destroy()
+      return
+    }
+    if (rateLimitResponse && scrapeResult.statusCode >= 400) {
+      writeOriginalResponse(stream, rateLimitResponse, body?.length ?? 0, method)
+      return
+    }
+    if (rateLimitResponse?.mode === "stream") rateLimitResponse.socket.destroy()
     if (opts.debug)
-      log.proxy.debug(
-        {
-          url,
-          tier: scrapeResult.tier,
-          status: scrapeResult.statusCode,
-          htmlBytes: scrapeResult.html?.length ?? 0,
-          bodyBytes: scrapeResult.body?.length ?? 0,
-        },
-        "scrape() completed",
+      console.log(
+        `[proxy] scrape() tier ${scrapeResult.tier} for ${url} -> ${scrapeResult.statusCode} html=${scrapeResult.html?.length ?? 0}b body=${scrapeResult.body?.length ?? 0}b`,
       )
 
     if (opts.debug) {
       for (const t of scrapeResult.timings) {
-        log.proxy.debug(
-          { tier: t.tier, status: t.status, durationMs: t.durationMs, reason: t.reason ?? null },
-          "scrape() tier timing",
-        )
+        console.log(`  tier ${t.tier}: ${t.status} (${t.durationMs}ms) ${t.reason ?? ""}`)
       }
     }
 
-    // Browser tiers expose both the original navigation response and the
-    // rendered DOM. For HTML, the latter is the solved page behind the challenge.
-    // Binary responses retain their exact raw bytes.
+    // Browser tiers expose decoded navigation bodies. responseFromScrapeResult
+    // removes upstream representation headers that no longer describe those
+    // bytes; Tier 1 remains byte-faithful.
     const response = responseFromScrapeResult(scrapeResult, opts.cp1251Hosts)
     if (opts.debug) {
-      log.proxy.debug(
-        {
-          status: scrapeResult.statusCode || 200,
-          payloadBytes: response.body.length,
-          contentType: response.contentType,
-        },
-        "writeResponseFromBuffer",
+      console.log(
+        `[proxy] writeResponseFromBuffer status=${scrapeResult.statusCode || 200} payload=${response.body.length}b contentType=${response.contentType}`,
       )
     }
     writeResponseFromBuffer(
@@ -495,22 +610,56 @@ async function serveViaScrape(
       response.headers,
       response.body,
       response.contentType,
+      method,
     )
   } catch (err) {
-    log.proxy.error({ url, err }, "scrape() failed")
+    if (signal.aborted || stream.destroyed) {
+      if (rateLimitResponse?.mode === "stream") rateLimitResponse.socket.destroy()
+      stream.destroy()
+      return
+    }
+    if (rateLimitResponse) {
+      if (opts.debug)
+        console.log(`[proxy] HTTP 429 fallback failed for ${safeUrl(url)} -> preserving original response`)
+      writeOriginalResponse(stream, rateLimitResponse, body?.length ?? 0, method)
+      return
+    }
+    const evidence = err instanceof ScrapeError ? terminalBlockedEvidence(err) : undefined
+    if (evidence) {
+      const response = responseFromBlockedEvidence(evidence)
+      if (opts.debug) {
+        console.log(
+          `[proxy] scrape() caught terminal challenge for ${url} (reason: ${evidence.reason}) -> passing through blocked evidence (${response.statusCode})`,
+        )
+      }
+      writeResponseFromBuffer(
+        stream,
+        response.statusCode,
+        response.headers,
+        response.body,
+        response.contentType,
+        method,
+      )
+      return
+    }
+
+    console.error("[proxy] scrape() failed for", safeUrl(url), err instanceof Error ? err.message : err)
     writeResponseFromBuffer(
       stream,
       502,
-      { "Content-Type": "text/plain; charset=utf-8" },
+      { "Content-Type": "text/plain; charset=utf-8", "Proxy-Status": "trawl; error=proxy_internal_error" },
       Buffer.from(`TRAWL proxy error: ${err instanceof Error ? err.message : String(err)}`),
       "text/plain; charset=utf-8",
+      method,
     )
+  } finally {
+    stream.off("close", disconnect)
   }
 }
 
 // Minimal plain-HTTP (non-TLS) proxy support, mainly for completeness / http:// targets.
-async function handlePlainHttp(clientSocket: net.Socket, first: Buffer, opts: MitmProxyOptions): Promise<void> {
-  // Accumulate full HTTP headers before dispatching — needed to detect Upgrade: websocket
+async function handlePlainHttp(clientSocket: net.Socket, first: Buffer, opts: ProxyOptions): Promise<void> {
+  // Accumulate full HTTP headers before dispatching - needed to detect Upgrade: websocket
   // and to know where the body starts. The first chunk from the main listener is already
   // a complete request in most cases (curl/Chromium send headers + small body in one packet),
   // so check the boundary inline before waiting for another 'data' event.

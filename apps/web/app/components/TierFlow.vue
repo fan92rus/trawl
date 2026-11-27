@@ -3,28 +3,28 @@ const tiers = [
   {
     num: "01",
     name: "Plain HTTP Fetch",
-    time: "< 100ms",
+    time: "HTTP first",
     tag: "no browser",
-    desc: "Standard fetch with realistic browser headers — Accept, Accept-Language, Accept-Encoding, and a real Chrome UA. Handles unprotected pages instantly. Zero browser cost.",
+    desc: "Fetch ordinary content directly, or replay accepted Cloudflare and Anubis clearance with the matching browser identity. No new browser page is needed when HTTP is accepted.",
   },
   {
     num: "02",
     name: "Cached Browser Session",
-    time: "~500ms",
+    time: "session reuse",
     tag: "redis hit",
-    desc: "Restores solved cookies from Redis into a warm pooled browser. No challenge re-solve while the target accepts the session. Returns the page in under a second. Cache TTL is configurable.",
+    desc: "Restores solved cookies from Redis into a warm pooled browser. No challenge re-solve while the target accepts the session. Cache TTL is configurable; rejected sessions escalate.",
   },
   {
     num: "03",
     name: "Live Challenge Solve",
-    time: "4–15s",
+    time: "challenge-dependent",
     tag: "fresh context",
-    desc: "A fresh Camoufox context runs the matching Cloudflare, Akamai, or Imperva flow. Turnstile, reCAPTCHA, hCaptcha, and GeeTest are solved automatically when encountered. Cookies are cached on success.",
+    desc: "A fresh Camoufox context runs the matching challenge flow, including Cloudflare and Anubis. Supported embedded widgets use their own solver and completion checks. Cookies are cached on success.",
   },
   {
     num: "04",
     name: "Residential Proxy",
-    time: "8–25s",
+    time: "challenge-dependent",
     tag: "optional",
     desc: "Same as Tier 3 but routed through a residential proxy. Only triggered after the direct or datacenter path fails, so paid residential bandwidth is used only when necessary.",
   },
@@ -37,8 +37,8 @@ const tiers = [
       <p class="eyebrow">how it works</p>
       <h2 class="section-title">four tiers, one request.</h2>
       <p class="section-sub">
-        TRAWL tries the cheapest path first and escalates only on failure. The majority of traffic never touches a
-        browser. When it does, the result is cached immediately.
+        TRAWL starts with the cheapest eligible path and escalates when needed. Accepted clearance sessions can avoid a
+        fresh solve. A shared request deadline bounds fetching, browser work and captures.
       </p>
 
       <div class="tiers">

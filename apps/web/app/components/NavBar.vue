@@ -11,17 +11,17 @@ function closeMenu() {
 <template>
   <header class="navbar">
     <div class="navbar-inner">
-      <a href="/" class="brand" @click="closeMenu">
-        <span class="brand-mark">TRAWL</span>
-        <span class="brand-dot" />
+      <a href="/" class="brand" aria-label="TRAWL home" @click="closeMenu">
+        <BrandWordmark />
       </a>
 
       <nav class="nav-links" aria-label="Primary navigation">
         <a href="#features" class="nav-link">features</a>
-        <a href="#captcha" class="nav-link">captcha</a>
         <a href="#how-it-works" class="nav-link">tiers</a>
-        <a href="#proxy" class="nav-link">proxy</a>
         <a href="#compare" class="nav-link">benchmarks</a>
+        <a href="#captcha" class="nav-link">captcha</a>
+        <a href="#proxy" class="nav-link">proxy</a>
+        <a href="#mcp" class="nav-link">MCP</a>
         <a href="#code" class="nav-link">quickstart</a>
         <a :href="docsUrl" class="nav-link">docs</a>
         <a
@@ -61,10 +61,12 @@ function closeMenu() {
     <Transition name="menu">
       <nav v-show="menuOpen" id="mobile-navigation" class="mobile-menu" aria-label="Mobile navigation">
         <a href="#features" class="mobile-link" @click="closeMenu">features</a>
-        <a href="#captcha" class="mobile-link" @click="closeMenu">captcha</a>
         <a href="#how-it-works" class="mobile-link" @click="closeMenu">tiers</a>
-        <a href="#proxy" class="mobile-link" @click="closeMenu">proxy</a>
         <a href="#compare" class="mobile-link" @click="closeMenu">benchmarks</a>
+        <a href="#captcha" class="mobile-link" @click="closeMenu">captcha</a>
+        <a href="#proxy" class="mobile-link" @click="closeMenu">proxy</a>
+        <a href="#mcp" class="mobile-link" @click="closeMenu">MCP</a>
+        <a href="#dashboard" class="mobile-link" @click="closeMenu">dashboard</a>
         <a href="#code" class="mobile-link" @click="closeMenu">quickstart</a>
         <a :href="docsUrl" class="mobile-link" @click="closeMenu" @keydown.enter="closeMenu">docs</a>
         <a
@@ -122,25 +124,11 @@ function closeMenu() {
   gap: 8px;
 }
 
-.brand-mark {
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  color: var(--text);
-}
-
-.brand-dot {
-  width: 5px;
-  height: 5px;
-  background: var(--accent);
-  animation: pulse-dot 2.5s ease-in-out infinite;
-}
-
 .nav-links {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 24px;
+  gap: 18px;
 }
 
 .nav-link {
@@ -183,7 +171,7 @@ function closeMenu() {
   padding: 8px 16px;
 }
 
-/* Burger button — hidden on desktop */
+/* Burger button - hidden on desktop */
 .burger {
   display: none;
   flex-direction: column;
@@ -246,7 +234,7 @@ function closeMenu() {
   border-top: 1px solid var(--border);
 }
 
-/* Click-outside backdrop — below navbar (z:100), above page content */
+/* Click-outside backdrop - below navbar (z:100), above page content */
 .menu-backdrop {
   position: fixed;
   inset: 0;
@@ -264,18 +252,6 @@ function closeMenu() {
 .menu-leave-to {
   opacity: 0;
   transform: translateY(-6px);
-}
-
-@keyframes pulse-dot {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.4;
-    transform: scale(0.85);
-  }
 }
 
 @media (max-width: 900px) {

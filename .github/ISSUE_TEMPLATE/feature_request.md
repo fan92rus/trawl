@@ -12,7 +12,7 @@ What are you trying to do that TRAWL doesn't support today? What's the use case?
 
 ## Proposed solution
 
-How would you like this to work? Be specific — request shape, response shape, env vars, config keys.
+How would you like this to work? Be specific - request shape, response shape, env vars, config keys.
 
 ## Alternatives considered
 
@@ -36,4 +36,4 @@ If you checked the second box, mention which tier slot it would occupy and rough
 
 ## Additional context
 
-Screenshots, examples from other tools, references — anything that helps frame the proposal.
+Screenshots, examples from other tools, references - anything that helps frame the proposal.

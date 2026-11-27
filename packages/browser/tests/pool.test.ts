@@ -22,7 +22,7 @@ const waitFor = async (predicate: () => boolean, budgetMs = 1000) => {
   throw new Error("timed out waiting for condition")
 }
 
-const NEVER = () => new Promise<void>(() => {})
+const NEVER = () => new Promise<never>(() => {})
 
 type MockBrowser = {
   closed: boolean
@@ -79,8 +79,9 @@ describe("BrowserPool mode", () => {
 })
 
 describe("BrowserPool recycling", () => {
-  test("disables Firefox direct fallback for proxied navigations", () => {
+  test("prevents direct fallback and local DNS resolution for proxied navigations", () => {
     expect(PROXY_SAFETY_FIREFOX_PREFS["network.proxy.failover_direct"]).toBeFalse()
+    expect(PROXY_SAFETY_FIREFOX_PREFS["network.proxy.socks_remote_dns"]).toBeTrue()
   })
 
   test("publishes the first browser before warming remaining capacity concurrently", async () => {
@@ -139,14 +140,14 @@ describe("BrowserPool recycling", () => {
     await pool.init()
 
     const first = await pool.acquire("example.com")
-    first.noteTemporaryContext?.("tier3 fresh context")
+    first.noteTemporaryContext?.()
     pool.release(first.id)
 
     expect(pool.getStats().restarts).toBe(0)
     expect(pool.getStats().available).toBe(1)
 
     const second = await pool.acquire("example.com")
-    second.noteTemporaryContext?.("tier3 fresh context")
+    second.noteTemporaryContext?.()
     pool.release(second.id)
 
     await waitFor(() => pool.getStats().restarts === 1)
@@ -168,14 +169,14 @@ describe("BrowserPool recycling", () => {
 
     await pool.init()
 
-    // Hammer the pool with noteTemporaryContext — should never trigger recycle.
+    // Hammer the pool with noteTemporaryContext - should never trigger recycle.
     for (let i = 0; i < 20; i++) {
       const handle = await pool.acquire("example.com")
-      handle.noteTemporaryContext?.("tier3 blocked")
+      handle.noteTemporaryContext?.()
       pool.release(handle.id)
     }
 
-    // No recycle should have happened — only the initial browser exists.
+    // No recycle should have happened - only the initial browser exists.
     expect(pool.getStats().restarts).toBe(0)
     expect(browsers).toHaveLength(1)
   })
@@ -287,7 +288,7 @@ describe("BrowserPool wedge recovery", () => {
   test("a browser whose close() never resolves does not strand the entry in restarting", async () => {
     // The failure: restartEntry awaited context.close() with no bound, the
     // close never settled, and `restarting` stayed true forever. From then on the 30s
-    // health check hit the `if (entry.restarting) return` guard and could only log —
+    // health check hit the `if (entry.restarting) return` guard and could only log -
     // the entry was never rebuilt and never counted as available again.
     const browsers: MockBrowser[] = []
     const factory = async () => {
@@ -328,10 +329,10 @@ describe("BrowserPool wedge recovery", () => {
     await pool.init()
 
     const handle = await pool.acquire("example.com")
-    handle.noteTemporaryContext?.("tier4 blocked")
+    handle.noteTemporaryContext?.()
     pool.release(handle.id, handle.lease)
 
-    // Before the fix this never happened — the pool sat at restarts=0, available=0.
+    // Before the fix this never happened - the pool sat at restarts=0, available=0.
     await waitFor(() => pool.getStats().restarts === 1)
     expect(pool.getStats().available).toBe(1)
     expect(pool.getStats().live).toBe(1)
@@ -372,7 +373,7 @@ describe("BrowserPool wedge recovery", () => {
     await pool.init()
 
     const handle = await pool.acquire("example.com")
-    handle.noteTemporaryContext?.("blocked")
+    handle.noteTemporaryContext?.()
     expect(() => pool.release(handle.id, handle.lease)).not.toThrow()
 
     await waitFor(() => pool.getStats().restarts === 1)
@@ -404,7 +405,7 @@ describe("BrowserPool wedge recovery", () => {
     let launches = 0
     const factory = async () => {
       launches++
-      // Second launch (the restart) hangs — camoufox-js can block before Playwright's
+      // Second launch (the restart) hangs - camoufox-js can block before Playwright's
       // own launch timeout ever applies.
       if (launches === 2) await NEVER()
       const browser: MockBrowser = {
@@ -438,7 +439,7 @@ describe("BrowserPool wedge recovery", () => {
     pool.startHealthCheck()
 
     const handle = await pool.acquire("example.com")
-    handle.noteTemporaryContext?.("tier4 blocked")
+    handle.noteTemporaryContext?.()
     pool.release(handle.id, handle.lease)
 
     await new Promise((resolve) => setTimeout(resolve, 80))
@@ -451,7 +452,7 @@ describe("BrowserPool wedge recovery", () => {
 
   test("a stalled checkout is not counted as live capacity", async () => {
     // This is the exact arithmetic that defeated the old `available + busy > 0` gate:
-    // total=1, busy=1, available=0 — which read as "ok" despite nothing being usable.
+    // total=1, busy=1, available=0 - which read as "ok" despite nothing being usable.
     const { factory } = makeFactory()
     const pool = createPool({ poolSize: 1, stallAfterMs: 40, browserFactory: factory })
     await pool.init()
@@ -466,13 +467,13 @@ describe("BrowserPool wedge recovery", () => {
     expect(stats.busy).toBe(1)
     expect(stats.available).toBe(0)
     expect(stats.stalled).toBe(1)
-    expect(stats.live).toBe(0) // …and the old gate would have said "ok" here
+    expect(stats.live).toBe(0) // ...and the old gate would have said "ok" here
     expect(handle.id).toBe(0)
   })
 
   test("a busy entry whose browser died is not counted as live capacity", async () => {
     // The health check never probes busy entries, so a checkout whose browser dies would
-    // otherwise read as capacity right up until its stall deadline — the same "200 with
+    // otherwise read as capacity right up until its stall deadline - the same "200 with
     // nothing usable" failure the gate exists to prevent, just on a timer.
     const { factory, browsers } = makeFactory()
     const pool = createPool({ poolSize: 1, stallAfterMs: 60_000, browserFactory: factory })
@@ -486,30 +487,60 @@ describe("BrowserPool wedge recovery", () => {
 
     const stats = pool.getStats()
     expect(stats.busy).toBe(1)
-    expect(stats.stalled).toBe(0) // still inside its budget…
-    expect(stats.live).toBe(0) // …but not usable, so not capacity
+    expect(stats.stalled).toBe(0) // still inside its budget...
+    expect(stats.live).toBe(0) // ...but not usable, so not capacity
     expect(handle.id).toBe(0)
   })
 
-  test("queueDepth reports acquisitions waiting for a free browser", async () => {
+  test("reclaims a disconnected browser during checkout without waiting for its budget", async () => {
+    const { factory, browsers } = makeFactory()
+    const pool = createPool({
+      poolSize: 1,
+      stallAfterMs: 60_000,
+      healthIntervalMs: 20,
+      browserFactory: factory,
+    })
+    await pool.init()
+    pool.startHealthCheck()
+
+    const abandoned = await pool.acquire("example.com", 60_000)
+    browsers[0].closed = true
+    await waitFor(() => pool.getStats().restarts === 1)
+
+    const current = await pool.acquire("example.com")
+    pool.release(abandoned.id, abandoned.lease)
+    expect(pool.getStats().busy).toBe(1)
+    pool.release(current.id, current.lease)
+    expect(pool.getStats().available).toBe(1)
+  })
+
+  test("reports active checkout age and real queue depth", async () => {
     const { factory } = makeFactory()
-    const pool = createPool({ poolSize: 1, acquireTimeoutMs: 200, browserFactory: factory })
+    const pool = createPool({ poolSize: 1, acquireTimeoutMs: 80, pollIntervalMs: 10, browserFactory: factory })
     await pool.init()
 
-    expect(pool.getStats().queueDepth).toBe(0)
-
-    // First checkout occupies the only browser; the second must wait.
     const first = await pool.acquire("example.com")
-    const waiting = pool.acquire("example.com").catch((e: unknown) => e)
-
-    // Give the poll loop a tick — the waiter is now parked.
-    await new Promise((r) => setTimeout(r, 30))
+    const waiting = pool.acquire("example.org")
     expect(pool.getStats().queueDepth).toBe(1)
-
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(pool.getStats().longestBusyMs).toBeGreaterThanOrEqual(20)
     pool.release(first.id, first.lease)
-    await waiting // resolves once the first browser is released
-    await new Promise((r) => setTimeout(r, 30))
+    const second = await waiting
     expect(pool.getStats().queueDepth).toBe(0)
+    pool.release(second.id, second.lease)
+    expect(pool.getStats().longestBusyMs).toBe(0)
+  })
+
+  test("clears queue depth when a waiting acquire times out", async () => {
+    const { factory } = makeFactory()
+    const pool = createPool({ poolSize: 1, acquireTimeoutMs: 30, pollIntervalMs: 10, browserFactory: factory })
+    await pool.init()
+    const held = await pool.acquire()
+    const waiting = pool.acquire()
+    expect(pool.getStats().queueDepth).toBe(1)
+    await expect(waiting).rejects.toThrow("Browser pool exhausted")
+    expect(pool.getStats().queueDepth).toBe(0)
+    pool.release(held.id, held.lease)
   })
 
   test("a checkout inside the caller's own budget is never reclaimed", async () => {
@@ -526,7 +557,7 @@ describe("BrowserPool wedge recovery", () => {
     await pool.init()
     pool.startHealthCheck()
 
-    // Budget of 5s dwarfs the 40ms stall threshold — this checkout must survive.
+    // Budget of 5s dwarfs the 40ms stall threshold - this checkout must survive.
     const handle = await pool.acquire("example.com", 5000)
     await new Promise((r) => setTimeout(r, 300))
 
@@ -569,5 +600,843 @@ describe("BrowserPool wedge recovery", () => {
     pool.release(current.id, current.lease)
     expect(pool.getStats().busy).toBe(0)
     await pool.shutdown()
+  })
+})
+
+describe("Firefox launch preferences", () => {
+  test.each(
+    [false, true].flatMap((virtualDisplay) =>
+      [undefined, "1.1.1.1", "2606:4700:4700::1111"].map((geoipIp) => ({ virtualDisplay, geoipIp })),
+    ),
+  )("preserves launch preferences and GeoIP for %j", ({ virtualDisplay, geoipIp }) => {
+    const script = `
+      import { mock } from "bun:test"
+      let options
+      mock.module("camoufox-js", () => ({ Camoufox: async (input) => {
+        options = input
+        return {
+          newContext: async () => ({ pages: () => [], addInitScript: async () => {}, close: async () => {} }),
+          isConnected: () => true,
+          close: async () => {},
+        }
+      }}))
+      const { BrowserPool } = await import("../src/pool.ts")
+      const pool = new BrowserPool({ poolSize: 1, virtualDisplay: ${virtualDisplay}, geoipIp: ${JSON.stringify(geoipIp)}, userPrefs: {
+        "network.dns.blockDotOnion": false,
+        "network.proxy.failover_direct": true,
+        "network.proxy.no_proxies_on": "*",
+        "network.proxy.socks_remote_dns": false,
+        "network.proxy.allow_hijacking_localhost": false,
+        "media.peerconnection.ice.proxy_only_if_behind_proxy": false,
+        "test.string": "value",
+        "test.integer": 7,
+      }})
+      try {
+        await pool.init()
+        console.log(JSON.stringify({ headless: options.headless, geoip: options.geoip, prefs: options.firefox_user_prefs }))
+      } finally { await pool.shutdown() }
+    `
+    const result = Bun.spawnSync({ cmd: [process.execPath, "-e", script], cwd: import.meta.dir })
+    expect(result.exitCode, result.stderr.toString()).toBe(0)
+    const options = JSON.parse(result.stdout.toString().trim().split("\n").at(-1) ?? "")
+    expect(options.headless).toBe(virtualDisplay ? "virtual" : true)
+    expect(options.geoip).toBe(geoipIp ?? true)
+    expect(options.prefs).toMatchObject({
+      "network.dns.blockDotOnion": false,
+      "network.proxy.failover_direct": false,
+      "network.proxy.no_proxies_on": "",
+      "network.proxy.socks_remote_dns": true,
+      "network.proxy.allow_hijacking_localhost": true,
+      "media.peerconnection.ice.proxy_only_if_behind_proxy": true,
+      "test.string": "value",
+      "test.integer": 7,
+      "dom.ipc.processCount": 2,
+    })
+  })
+
+  test.each([true, false])("preserves the launch error and identifies IP discovery failure=%s", (ipFailure) => {
+    const script = `
+      import { mock } from "bun:test"
+      const original = new Error(${JSON.stringify(ipFailure ? "Failed to get a public proxy IP address from any API endpoint." : "missing browser executable")})
+      mock.module("camoufox-js", () => ({ Camoufox: async () => { throw original } }))
+      const { BrowserPool } = await import("../src/pool.ts")
+      const pool = new BrowserPool({ poolSize: 1 })
+      try { await pool.init(); throw new Error("Unexpected successful launch") }
+      catch (error) { console.log(JSON.stringify({ message: error.message, original: error === original, cause: error.cause === original })) }
+      finally { await pool.shutdown() }
+    `
+    const result = Bun.spawnSync({ cmd: [process.execPath, "-e", script], cwd: import.meta.dir })
+    expect(result.exitCode, result.stderr.toString()).toBe(0)
+    const error = JSON.parse(result.stdout.toString().trim().split("\n").at(-1) ?? "")
+    if (ipFailure) {
+      expect(error.message).toContain("BROWSER_GEOIP_IP")
+      expect(error.cause).toBe(true)
+    } else {
+      expect(error.message).toBe("missing browser executable")
+      expect(error.original).toBe(true)
+    }
+  })
+})
+
+describe("BrowserPool resource limits", () => {
+  test("queue waiting respects the caller budget instead of the pool timeout", async () => {
+    const { factory } = makeFactory()
+    const pool = createPool({ poolSize: 1, acquireTimeoutMs: 1000, pollIntervalMs: 200, browserFactory: factory })
+    await pool.init()
+    const held = await pool.acquire()
+    const start = performance.now()
+    await expect(pool.acquire("queued.test", 30)).rejects.toThrow("Browser pool exhausted")
+    expect(performance.now() - start).toBeLessThan(150)
+    expect(pool.getStats().queueDepth).toBe(0)
+    pool.release(held.id, held.lease)
+  })
+
+  test("an exhausted request budget cannot acquire an idle browser", async () => {
+    const { factory } = makeFactory()
+    const pool = createPool({ poolSize: 1, browserFactory: factory })
+    await pool.init()
+    await expect(pool.acquire("expired.test", 0)).rejects.toThrow("Browser pool exhausted")
+    expect(pool.getStats().available).toBe(1)
+  })
+
+  test("release wakes queued work without a polling interval", async () => {
+    const { factory } = makeFactory()
+    const pool = createPool({ poolSize: 1, pollIntervalMs: 500, browserFactory: factory })
+    await pool.init()
+    const held = await pool.acquire()
+    const queued = pool.acquire("queued.test", 1000)
+    const start = performance.now()
+    pool.release(held.id, held.lease)
+    const next = await queued
+    expect(performance.now() - start).toBeLessThan(150)
+    pool.release(next.id, next.lease)
+  })
+
+  test("acquisition recovers a disconnected browser without a health tick", async () => {
+    const { factory, browsers } = makeFactory()
+    const pool = createPool({ poolSize: 1, browserFactory: factory })
+    await pool.init()
+    browsers[0].closed = true
+    const next = await pool.acquire("recovery.test", 1000)
+    expect(next.browser).toBe(browsers[1])
+    expect(next.browser.isConnected()).toBeTrue()
+    expect(pool.getStats().restarts).toBe(1)
+    pool.release(next.id, next.lease)
+  })
+
+  test.each([100, 800])("retires first in a 1 GiB container with %s MiB usage", async (usageMiB) => {
+    const { factory: baseFactory, browsers } = makeFactory()
+    let overlap = false
+    const factory = async () => {
+      if (browsers.some((browser) => !browser.closed)) overlap = true
+      return baseFactory()
+    }
+    const pool = createPool({
+      poolSize: 1,
+      browserFactory: factory,
+      recycleAfterTemporaryContexts: 1,
+      memoryUsage: () => ({ currentBytes: usageMiB * 1024 ** 2, limitBytes: 1024 ** 3 }),
+    } as ConstructorParameters<typeof BrowserPool>[0])
+    await pool.init()
+    const held = await pool.acquire()
+    held.noteTemporaryContext?.()
+    expect(browsers[0].closed).toBeFalse()
+    pool.release(held.id, held.lease)
+    await waitFor(() => pool.getStats().restarts === 1)
+    expect(overlap).toBeFalse()
+    expect(pool.getStats().available).toBe(1)
+  })
+
+  test("memory pressure triggers cleanup even with context-count recycling disabled", async () => {
+    const { factory, browsers } = makeFactory()
+    const pool = createPool({
+      poolSize: 1,
+      browserFactory: factory,
+      recycleAfterTemporaryContexts: 0,
+      memoryUsage: () => ({ currentBytes: 950 * 1024 ** 2, limitBytes: 1024 ** 3 }),
+    } as ConstructorParameters<typeof BrowserPool>[0])
+    await pool.init()
+    const held = await pool.acquire()
+    pool.release(held.id, held.lease)
+    await waitFor(() => pool.getStats().restarts === 1)
+    expect(browsers[0].closed).toBeTrue()
+  })
+})
+
+describe("BrowserPool queued lifecycle", () => {
+  test("shutdown rejects queued callers immediately", async () => {
+    const { factory } = makeFactory()
+    const pool = createPool({ poolSize: 1, acquireTimeoutMs: 1000, browserFactory: factory })
+    await pool.init()
+    await pool.acquire()
+    const queued = pool.acquire()
+    const assertion = expect(queued).rejects.toThrow("Browser pool exhausted")
+    await pool.shutdown()
+    await assertion
+    expect(pool.getStats().queueDepth).toBe(0)
+  })
+
+  test("retains warm recycling when the container has enough headroom", async () => {
+    const { factory: baseFactory, browsers } = makeFactory()
+    let overlap = false
+    const pool = createPool({
+      poolSize: 1,
+      recycleAfterTemporaryContexts: 1,
+      memoryUsage: () => ({ currentBytes: 500 * 1024 ** 2, limitBytes: 2 * 1024 ** 3 }),
+      browserFactory: async () => {
+        if (browsers.some((browser) => !browser.closed)) overlap = true
+        return baseFactory()
+      },
+    })
+    await pool.init()
+    const held = await pool.acquire()
+    held.noteTemporaryContext?.()
+    pool.release(held.id, held.lease)
+    await waitFor(() => pool.getStats().restarts === 1)
+    expect(overlap).toBeTrue()
+    expect(browsers[0].closed).toBeTrue()
+  })
+
+  test("does not install a warmed browser over concurrent crash recovery", async () => {
+    const { factory: baseFactory, browsers } = makeFactory()
+    let launches = 0
+    let finishWarm: (() => void) | undefined
+    const pool = createPool({
+      poolSize: 1,
+      recycleAfterTemporaryContexts: 1,
+      healthIntervalMs: 10,
+      browserFactory: async () => {
+        const launch = ++launches
+        if (launch === 2)
+          await new Promise<void>((resolve) => {
+            finishWarm = resolve
+          })
+        return baseFactory()
+      },
+    })
+    await pool.init()
+    pool.startHealthCheck()
+    const held = await pool.acquire()
+    held.noteTemporaryContext?.()
+    pool.release(held.id, held.lease)
+    await waitFor(() => launches === 2)
+    browsers[0].closed = true
+    await waitFor(() => pool.getStats().restarts === 1)
+    const recovered = await pool.acquire()
+    finishWarm?.()
+    pool.release(recovered.id, recovered.lease)
+    await waitFor(() => browsers.length === 3 && browsers[2].closed)
+    expect(pool.getStats().restarts).toBe(1)
+    const next = await pool.acquire()
+    expect(next.browser).toBe(recovered.browser)
+    pool.release(next.id, next.lease)
+  })
+})
+
+describe("Optional ad blocking", () => {
+  test.each([true, false])("sets uBlock exclusion for blockAds=%s", (blockAds) => {
+    const script = `
+      import { mock } from "bun:test"
+      let excluded
+      mock.module("camoufox-js", () => ({ Camoufox: async (options) => {
+        excluded = options.exclude_addons
+        return { newContext: async () => ({ addInitScript: async () => {}, close: async () => {} }),
+          isConnected: () => true, close: async () => {} }
+      }}))
+      const { BrowserPool } = await import("../src/pool.ts")
+      const pool = new BrowserPool({ poolSize: 1, blockAds: ${blockAds} })
+      await pool.init(); await pool.shutdown()
+      console.log(JSON.stringify(excluded))
+    `
+    const result = Bun.spawnSync({ cmd: [process.execPath, "-e", script], cwd: import.meta.dir })
+    expect(result.exitCode, result.stderr.toString()).toBe(0)
+    expect(JSON.parse(result.stdout.toString().trim().split("\n").at(-1) ?? "")).toEqual(blockAds ? [] : ["UBO"])
+  })
+})
+
+test("inactive file cache does not cause memory-pressure recycling", async () => {
+  const { factory, browsers } = makeFactory()
+  const pool = createPool({
+    poolSize: 1,
+    browserFactory: factory,
+    recycleAfterTemporaryContexts: 0,
+    memoryUsage: () => ({ currentBytes: 950 * 1024 ** 2, workingSetBytes: 450 * 1024 ** 2, limitBytes: 1024 ** 3 }),
+  })
+  await pool.init()
+  const held = await pool.acquire()
+  held.noteTemporaryContext?.()
+  pool.release(held.id, held.lease)
+  await Bun.sleep(20)
+  expect(browsers).toHaveLength(1)
+  expect(pool.getStats().available).toBe(1)
+})
+
+test("a retained context closing restarts the entry even with a connected browser", async () => {
+  const { factory: baseFactory } = makeFactory()
+  const closes: Array<() => void> = []
+  const pool = createPool({
+    poolSize: 1,
+    browserFactory: async () => {
+      const result = await baseFactory()
+      return { ...result, context: { ...result.context, once: (_: string, close: () => void) => closes.push(close) } }
+    },
+  })
+  await pool.init()
+  const first = await pool.acquire()
+  closes[0]()
+  const next = await pool.acquire("recovered.test", 1000)
+  expect(next.browser).not.toBe(first.browser)
+  pool.release(first.id, first.lease)
+  expect(pool.getStats().busy).toBe(1)
+  pool.release(next.id, next.lease)
+  closes[0]()
+  await Bun.sleep(20)
+  expect(pool.getStats().restarts).toBe(1)
+})
+
+test("queued work uses a ready replacement instead of reacquiring the retired browser", async () => {
+  const { factory: baseFactory, browsers } = makeFactory()
+  let launches = 0
+  let finishWarm: (() => void) | undefined
+  const pool = createPool({
+    poolSize: 1,
+    recycleAfterTemporaryContexts: 1,
+    pollIntervalMs: 100,
+    browserFactory: async () => {
+      if (++launches === 2)
+        await new Promise<void>((resolve) => {
+          finishWarm = resolve
+        })
+      return baseFactory()
+    },
+  })
+  await pool.init()
+  const first = await pool.acquire()
+  first.noteTemporaryContext?.()
+  pool.release(first.id, first.lease)
+  const incumbent = await pool.acquire()
+  finishWarm?.()
+  await waitFor(() => browsers.length === 2)
+  const queued = pool.acquire("next.test", 1000)
+  pool.release(incumbent.id, incumbent.lease)
+  const next = await queued
+  expect(next.browser).toBe(browsers[1])
+  pool.release(next.id, next.lease)
+})
+
+describe("release cleanup", () => {
+  test("waits for pages to close before reacquiring and assessing memory", async () => {
+    const { factory, contexts } = makeFactory()
+    let memory = 950 * 1024 ** 2
+    const pool = createPool({
+      poolSize: 1,
+      browserFactory: factory,
+      recycleAfterTemporaryContexts: 0,
+      memoryUsage: () => ({ currentBytes: memory, workingSetBytes: memory, limitBytes: 1024 ** 3 }),
+    })
+    await pool.init()
+    let finishClose!: () => void
+    contexts[0].pages = () => [
+      {
+        close: () =>
+          new Promise<void>((resolve) => {
+            finishClose = () => {
+              memory = 500 * 1024 ** 2
+              resolve()
+            }
+          }),
+      },
+    ]
+    const first = await pool.acquire()
+    pool.release(first.id, first.lease)
+    const next = pool.acquire()
+    let acquired = false
+    void next.then(() => {
+      acquired = true
+    })
+    await Bun.sleep(20)
+    expect(acquired).toBeFalse()
+    finishClose()
+    const second = await next
+    expect(pool.getStats().restarts).toBe(0)
+    contexts[0].pages = () => []
+    pool.release(second.id, second.lease)
+  })
+})
+
+describe("optional idle retirement", () => {
+  test("retires idle browsers and wakes only one for concurrent acquires", async () => {
+    const { factory, browsers } = makeFactory()
+    const pool = createPool({ poolSize: 1, browserFactory: factory, idleTimeoutMs: 30, healthIntervalMs: 10 })
+    await pool.init()
+    pool.startHealthCheck()
+    await waitFor(() => pool.getStats().sleeping === 1)
+    expect(browsers[0].closed).toBeTrue()
+    expect(pool.getStats().live).toBe(0)
+    const first = await pool.acquire()
+    const queued = pool.acquire()
+    expect(browsers).toHaveLength(2)
+    await Bun.sleep(40)
+    expect(pool.getStats().sleeping).toBe(0)
+    expect(browsers[1].closed).toBeFalse()
+    pool.release(first.id, first.lease)
+    const next = await queued
+    pool.release(next.id, next.lease)
+  })
+
+  test("keeps warm browsers by default", async () => {
+    const { factory, browsers } = makeFactory()
+    const pool = createPool({ poolSize: 1, browserFactory: factory, healthIntervalMs: 10 })
+    await pool.init()
+    pool.startHealthCheck()
+    await Bun.sleep(50)
+    expect(pool.getStats().sleeping).toBe(0)
+    expect(browsers[0].closed).toBeFalse()
+  })
+})
+
+describe("cold boot", () => {
+  test("defers all browser launches until the first acquire", async () => {
+    const { factory, browsers } = makeFactory()
+    const pool = createPool({ poolSize: 2, browserFactory: factory, coldBoot: true, healthIntervalMs: 10 })
+    await pool.init()
+    pool.startHealthCheck()
+    await Bun.sleep(50)
+
+    expect(browsers).toHaveLength(0)
+    expect(pool.getStats()).toMatchObject({ total: 2, live: 0, available: 0, sleeping: 2 })
+
+    const first = await pool.acquire()
+    const second = await pool.acquire()
+    expect(browsers).toHaveLength(2)
+    expect(pool.getStats()).toMatchObject({ live: 2, sleeping: 0 })
+
+    pool.release(first.id, first.lease)
+    pool.release(second.id, second.lease)
+  })
+
+  test("does not report sleeping capacity blocked behind a failed first launch", async () => {
+    const pool = createPool({
+      poolSize: 2,
+      browserFactory: NEVER,
+      coldBoot: true,
+      acquireTimeoutMs: 50,
+      launchTimeoutMs: 10,
+      healthIntervalMs: 10,
+      maxAbandonedLaunches: 1,
+    })
+    await pool.init()
+    pool.startHealthCheck()
+    await expect(pool.acquire()).rejects.toThrow("Browser pool exhausted")
+    expect(pool.getStats()).toMatchObject({ live: 0, sleeping: 0, queueDepth: 0 })
+  })
+
+  test("retries a failed cold launch and makes the remaining capacity available", async () => {
+    const { factory } = makeFactory()
+    let attempts = 0
+    const pool = createPool({
+      poolSize: 2,
+      coldBoot: true,
+      healthIntervalMs: 10,
+      browserFactory: async () => {
+        if (++attempts === 1) throw new Error("First launch failed")
+        return factory()
+      },
+    })
+    await pool.init()
+    pool.startHealthCheck()
+    const handle = await pool.acquire()
+    pool.release(handle.id, handle.lease)
+    await waitFor(() => pool.getStats().live === 2)
+    expect(attempts).toBe(3)
+  })
+
+  test("coordinates initial Camoufox setup across cold headless and headful pools", () => {
+    // A child process isolates the Camoufox mock and its one-time shared setup.
+    const result = Bun.spawnSync({
+      cmd: [
+        process.execPath,
+        "-e",
+        `import { mock } from "bun:test";
+        let launches = 0, active = 0, peak = 0;
+        let release;
+        const gate = new Promise(resolve => { release = resolve });
+        mock.module("camoufox-js", () => ({ Camoufox: async () => {
+          launches++; active++; peak = Math.max(peak, active);
+          await gate; active--;
+          return {
+            isConnected: () => true, close: async () => {},
+            newContext: async () => ({ addInitScript: async () => {}, pages: () => [], close: async () => {} }),
+          };
+        }}));
+        const { BrowserPool } = await import("../src/pool.ts");
+        const pools = [false, true].map(virtualDisplay => new BrowserPool({
+          poolSize: 1, coldBoot: true, virtualDisplay, acquireTimeoutMs: 1000,
+        }));
+        await Promise.all(pools.map(pool => pool.init()));
+        const requests = pools.map(pool => pool.acquire());
+        const deadline = Date.now() + 500;
+        while (!launches && Date.now() < deadline) await Bun.sleep(5);
+        await Bun.sleep(30);
+        const initialPeak = peak;
+        release();
+        const handles = await Promise.all(requests);
+        handles.forEach((handle, index) => pools[index].release(handle.id, handle.lease));
+        await Promise.all(pools.map(pool => pool.shutdown()));
+        console.log(JSON.stringify({ initialPeak, launches }));
+        if (initialPeak !== 1 || launches !== 2) throw new Error("Concurrent initial Camoufox setup");`,
+      ],
+      cwd: import.meta.dir,
+    })
+    expect(result.exitCode, result.stderr.toString() + result.stdout.toString()).toBe(0)
+  })
+})
+
+test("cancelling an acquire removes its waiter before capacity becomes available", async () => {
+  const { factory } = makeFactory()
+  const pool = createPool({ poolSize: 1, browserFactory: factory })
+  await pool.init()
+  const held = await pool.acquire()
+  const controller = new AbortController()
+  const queued = pool.acquire("cancelled.test", 5000, controller.signal)
+  expect(pool.getStats().queueDepth).toBe(1)
+  controller.abort()
+  await expect(queued).rejects.toThrow()
+  expect(pool.getStats().queueDepth).toBe(0)
+  pool.release(held.id, held.lease)
+  expect(pool.getStats().available).toBe(1)
+})
+
+test("warm replacement waits for cleanup of the incumbent lease", async () => {
+  const { factory, contexts, browsers } = makeFactory()
+  let launches = 0
+  let finishWarm!: () => void
+  const pool = createPool({
+    poolSize: 1,
+    browserFactory: async () => {
+      if (++launches === 2)
+        await new Promise<void>((resolve) => {
+          finishWarm = resolve
+        })
+      return factory()
+    },
+    recycleAfterTemporaryContexts: 1,
+    pollIntervalMs: 5,
+  })
+  await pool.init()
+  const first = await pool.acquire()
+  first.noteTemporaryContext?.()
+  pool.release(first.id, first.lease)
+  const held = await pool.acquire()
+  let finishClose!: () => void
+  contexts[0].pages = () => [
+    {
+      close: () =>
+        new Promise<void>((resolve) => {
+          finishClose = resolve
+        }),
+    },
+  ]
+  finishWarm()
+  await waitFor(() => browsers.length === 2)
+  pool.release(held.id, held.lease)
+  const queued = pool.acquire()
+  await Bun.sleep(20)
+  expect(pool.getStats().available).toBe(0)
+  expect(pool.getStats().restarts).toBe(0)
+  finishClose()
+  const next = await queued
+  expect(next.browser).toBe(browsers[1])
+  pool.release(next.id, next.lease)
+  expect(pool.getStats().available).toBe(1)
+})
+
+test("idle retirement still closes the browser when its context close hangs", async () => {
+  const { factory, contexts, browsers } = makeFactory()
+  const pool = createPool({
+    poolSize: 1,
+    browserFactory: factory,
+    idleTimeoutMs: 30,
+    healthIntervalMs: 5,
+    closeTimeoutMs: 20,
+  })
+  await pool.init()
+  contexts[0].close = NEVER
+  pool.startHealthCheck()
+  await waitFor(() => pool.getStats().sleeping === 1)
+  expect(browsers[0].closed).toBeTrue()
+  const next = await pool.acquire()
+  expect(next.browser).toBe(browsers[1])
+  expect(pool.getStats().restarts).toBe(1)
+  pool.release(next.id, next.lease)
+})
+
+describe("persistent session leases", () => {
+  test("a pinned acquire waits for its browser even when another slot is free", async () => {
+    const { factory } = makeFactory()
+    const pool = createPool({ poolSize: 2, browserFactory: factory, acquireTimeoutMs: 50 })
+    await pool.init()
+    const first = await pool.acquire()
+    await expect(pool.acquire(undefined, 15, undefined, first.id)).rejects.toThrow("exhausted")
+    pool.release(first.id, first.lease)
+    const pinned = await pool.acquire("other.example", 50, undefined, first.id)
+    expect(pinned.browser).toBe(first.browser)
+    pool.release(pinned.id, pinned.lease)
+  })
+
+  test("retention postpones count recycling but releasing it restores recycling", async () => {
+    const { factory, browsers } = makeFactory()
+    const pool = createPool({ poolSize: 1, browserFactory: factory, recycleAfterTemporaryContexts: 1 })
+    await pool.init()
+    const handle = await pool.acquire()
+    const releaseRetention = handle.retainBrowser?.()
+    if (!releaseRetention) throw new Error("Missing browser retention")
+    handle.noteTemporaryContext?.()
+    pool.release(handle.id, handle.lease)
+    await Bun.sleep(20)
+    expect(browsers).toHaveLength(1)
+    const second = await pool.acquire()
+    expect(second.browser).toBe(handle.browser)
+    pool.release(second.id, second.lease)
+    releaseRetention()
+    releaseRetention()
+    await waitFor(() => browsers.length === 2 && browsers[0].closed)
+  })
+
+  test("retention never suppresses the container memory guard", async () => {
+    const { factory, browsers } = makeFactory()
+    const pool = createPool({
+      poolSize: 1,
+      browserFactory: factory,
+      recycleAfterTemporaryContexts: 1,
+      memoryUsage: () => ({ limitBytes: 1024 ** 3, currentBytes: 950 * 1024 ** 2, workingSetBytes: 950 * 1024 ** 2 }),
+    })
+    await pool.init()
+    const handle = await pool.acquire()
+    const releaseRetention = handle.retainBrowser?.()
+    if (!releaseRetention) throw new Error("Missing browser retention")
+    handle.noteTemporaryContext?.()
+    pool.release(handle.id, handle.lease)
+    await waitFor(() => browsers.length === 2 && browsers[0].closed)
+    releaseRetention()
+  })
+})
+
+test("session retention never postpones cleanup recovery, including a previous lease on the same browser", async () => {
+  const { factory, browsers } = makeFactory()
+  const pool = createPool({ poolSize: 1, browserFactory: factory })
+  await pool.init()
+  const first = await pool.acquire()
+  const releaseRetention = first.retainBrowser?.()
+  if (!releaseRetention) throw new Error("Missing browser retention")
+  pool.release(first.id, first.lease)
+  const second = await pool.acquire()
+  first.requestBrowserReplacement?.("session context cleanup timed out")
+  expect(browsers).toHaveLength(1)
+  pool.release(second.id, second.lease)
+  await waitFor(() => browsers.length === 2 && browsers[0].closed)
+  releaseRetention()
+  first.requestBrowserReplacement?.("old browser cleanup")
+  await Bun.sleep(10)
+  expect(browsers).toHaveLength(2)
+})
+
+test("a completed recovery clears requests made while the replacement was warming", async () => {
+  const { factory, browsers } = makeFactory()
+  let launches = 0
+  let finishWarm!: () => void
+  const pool = createPool({
+    poolSize: 1,
+    recycleAfterTemporaryContexts: 1,
+    browserFactory: async () => {
+      launches++
+      if (launches === 2)
+        await new Promise<void>((resolve) => {
+          finishWarm = resolve
+        })
+      return factory()
+    },
+  })
+  await pool.init()
+  const first = await pool.acquire()
+  first.requestBrowserReplacement?.("cleanup recovery")
+  pool.release(first.id, first.lease)
+  await waitFor(() => launches === 2)
+  const duringWarm = await pool.acquire()
+  duringWarm.requestBrowserReplacement?.("second cleanup recovery")
+  pool.release(duringWarm.id, duringWarm.lease)
+  finishWarm()
+  await waitFor(() => browsers.length === 2 && browsers[0].closed)
+  const recovered = await pool.acquire()
+  const releaseRetention = recovered.retainBrowser?.()
+  if (!releaseRetention) throw new Error("Missing browser retention")
+  recovered.noteTemporaryContext?.()
+  pool.release(recovered.id, recovered.lease)
+  await Bun.sleep(20)
+  expect(launches).toBe(2)
+  releaseRetention()
+})
+
+describe("BrowserPool saturation counters", () => {
+  test("counts a direct acquire and a queued one", async () => {
+    const pool = createPool({ poolSize: 1, acquireTimeoutMs: 5_000, browserFactory: makeFactory().factory })
+    await pool.init()
+
+    const first = await pool.acquire()
+    expect(pool.getStats().acquired).toBe(1)
+    const waitBefore = pool.getStats().acquireWaitMsTotal ?? 0
+
+    const queued = pool.acquire()
+    await waitFor(() => pool.getStats().queueDepth === 1)
+    await Bun.sleep(20)
+    pool.release(first.id, first.lease)
+    const second = await queued
+
+    const stats = pool.getStats()
+    expect(stats.acquired).toBe(2)
+    expect(stats.exhausted).toBe(0)
+    expect(stats.queueDepth).toBe(0)
+    expect(stats.acquireWaitMsTotal).toBeGreaterThanOrEqual(waitBefore + 15)
+    pool.release(second.id, second.lease)
+  })
+
+  test("a timed-out caller counts as exhausted without adding to successful checkout wait", async () => {
+    const pool = createPool({ poolSize: 1, acquireTimeoutMs: 50, browserFactory: makeFactory().factory })
+    await pool.init()
+
+    const held = await pool.acquire()
+    const waitBefore = pool.getStats().acquireWaitMsTotal
+    await expect(pool.acquire()).rejects.toThrow("Browser pool exhausted")
+
+    const stats = pool.getStats()
+    expect(stats.exhausted).toBe(1)
+    expect(stats.acquired).toBe(1)
+    expect(stats.acquireWaitMsTotal).toBe(waitBefore)
+    pool.release(held.id, held.lease)
+  })
+
+  test("a caller that aborts is not counted as exhausted", async () => {
+    const pool = createPool({ poolSize: 1, acquireTimeoutMs: 5_000, browserFactory: makeFactory().factory })
+    await pool.init()
+
+    const held = await pool.acquire()
+    const waitBefore = pool.getStats().acquireWaitMsTotal
+    const controller = new AbortController()
+    const queued = pool.acquire("aborted.test", undefined, controller.signal)
+    await waitFor(() => pool.getStats().queueDepth === 1)
+    await Bun.sleep(20)
+    controller.abort()
+    await expect(queued).rejects.toThrow("Browser pool exhausted")
+
+    expect(pool.getStats().exhausted).toBe(0)
+    expect(pool.getStats().queueDepth).toBe(0)
+    expect(pool.getStats().acquireWaitMsTotal).toBe(waitBefore)
+    pool.release(held.id, held.lease)
+  })
+})
+
+// Without a drain, shutdown() closed every context at once, and a request mid-scrape
+// failed with "Target page, context or browser has been closed".
+describe("BrowserPool shutdown drain", () => {
+  test("rejects invalid drain durations", () => {
+    for (const drainTimeoutMs of [-1, 1.5, NaN, Infinity]) {
+      expect(() => new BrowserPool({ poolSize: 1, drainTimeoutMs })).toThrow("drainTimeoutMs")
+    }
+  })
+
+  test("can skip a configured drain after the HTTP server has already waited", async () => {
+    const { factory, contexts } = makeFactory()
+    const pool = createPool({ poolSize: 1, drainTimeoutMs: 5_000, browserFactory: factory })
+    await pool.init()
+    await pool.acquire()
+    const started = performance.now()
+    await pool.shutdown(0)
+    expect(performance.now() - started).toBeLessThan(1000)
+    expect(contexts.every((context) => context.closed)).toBeTrue()
+  })
+
+  test("waits for a checkout that is still in flight", async () => {
+    const { factory, contexts } = makeFactory()
+    const pool = createPool({ poolSize: 1, pollIntervalMs: 10, drainTimeoutMs: 5_000, browserFactory: factory })
+    await pool.init()
+
+    const held = await pool.acquire()
+    let settled = false
+    const shutdown = pool.shutdown().then(() => {
+      settled = true
+    })
+
+    await Bun.sleep(200)
+    expect(contexts.every((c) => !c.closed)).toBeTrue()
+    expect(settled).toBeFalse()
+    expect(pool.getStats().draining).toBeTrue()
+
+    pool.release(held.id, held.lease)
+    await shutdown
+    expect(contexts.every((c) => c.closed)).toBeTrue()
+  })
+
+  test("closes anyway once the drain timeout expires", async () => {
+    const { factory, contexts } = makeFactory()
+    const pool = createPool({ poolSize: 1, pollIntervalMs: 10, drainTimeoutMs: 150, browserFactory: factory })
+    await pool.init()
+    await pool.acquire()
+
+    const started = performance.now()
+    await pool.shutdown()
+
+    expect(performance.now() - started).toBeGreaterThanOrEqual(140)
+    expect(contexts.every((c) => c.closed)).toBeTrue()
+  })
+
+  test("does not wait for a stalled checkout", async () => {
+    const { factory } = makeFactory()
+    const pool = createPool({
+      poolSize: 1,
+      pollIntervalMs: 10,
+      stallAfterMs: 1,
+      drainTimeoutMs: 5_000,
+      browserFactory: factory,
+    })
+    await pool.init()
+    await pool.acquire()
+    await Bun.sleep(20)
+
+    const started = performance.now()
+    await pool.shutdown()
+    expect(performance.now() - started).toBeLessThan(1_000)
+  })
+
+  test("refuses new checkouts while draining instead of queueing them", async () => {
+    const { factory } = makeFactory()
+    const pool = createPool({
+      poolSize: 2,
+      acquireTimeoutMs: 60_000,
+      pollIntervalMs: 10,
+      drainTimeoutMs: 5_000,
+      browserFactory: factory,
+    })
+    await pool.init()
+    const held = await pool.acquire()
+    const shutdown = pool.shutdown()
+
+    const started = performance.now()
+    await expect(pool.acquire()).rejects.toThrow("Browser pool exhausted")
+    expect(performance.now() - started).toBeLessThan(1_000)
+
+    pool.release(held.id, held.lease)
+    await shutdown
+  })
+
+  test("closes at once by default", async () => {
+    const { factory, contexts } = makeFactory()
+    const pool = createPool({ poolSize: 1, browserFactory: factory })
+    await pool.init()
+    await pool.acquire()
+
+    const started = performance.now()
+    await pool.shutdown()
+    expect(performance.now() - started).toBeLessThan(1_000)
+    expect(contexts.every((c) => c.closed)).toBeTrue()
   })
 })

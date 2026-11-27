@@ -1,7 +1,18 @@
 import { describe, expect, test } from "bun:test"
-import type { BrowserPool } from "@trawl/browser"
+import { BrowserPool } from "@trawl/browser"
 import type { BrowserHandle } from "@trawl/types"
-import { getDeps, getHeadfulPool, initPool, shutdownPools } from "./deps"
+import { SCRAPE_MAX_TIMEOUT_MS, SCRAPE_MIN_TIER } from "./config"
+import {
+  createSessionCacheRecovery,
+  getDeps,
+  getHeadfulPool,
+  getPool,
+  initPool,
+  SessionCacheRecovery,
+  shutdownPools,
+} from "./deps"
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const handle = (headful: boolean): BrowserHandle => ({
   id: 0,
@@ -40,6 +51,44 @@ function poolFactory(options: { failHeadful?: boolean } = {}) {
 }
 
 describe("browser pool dependencies", () => {
+  test("cold boot defers both pools and routes first requests to their owner", async () => {
+    let launches = 0
+    await initPool({
+      poolSize: 1,
+      headfulPoolSize: 1,
+      coldBoot: true,
+      initCache: async () => {},
+      createPool: (options) =>
+        new BrowserPool({
+          ...options,
+          browserFactory: async () => {
+            launches++
+            return {
+              browser: { isConnected: () => true, close: async () => {} },
+              context: { pages: () => [], close: async () => {} },
+            }
+          },
+        }),
+    })
+    try {
+      expect(launches).toBe(0)
+      expect(getPool()?.getStats()).toMatchObject({ live: 0, sleeping: 1 })
+      expect(getHeadfulPool()?.getStats()).toMatchObject({ live: 0, sleeping: 1 })
+      const deps = getDeps()
+      const handles = await Promise.all([
+        deps.acquireBrowser("example.test", 500),
+        deps.acquireBrowser("example.test", 500, { headful: true }),
+      ])
+      expect(launches).toBe(2)
+      expect(handles.map((handle) => handle.headful)).toEqual([false, true])
+      for (const handle of handles) deps.releaseBrowser(handle)
+      expect(getPool()?.getStats().available).toBe(1)
+      expect(getHeadfulPool()?.getStats().available).toBe(1)
+    } finally {
+      await shutdownPools()
+    }
+  })
+
   test("disabled headful configuration starts only the main pool and fails headful acquisition clearly", async () => {
     const factory = poolFactory()
     await initPool({ poolSize: 1, headfulPoolSize: 0, createPool: factory.createPool, initCache: async () => {} })
@@ -57,6 +106,8 @@ describe("browser pool dependencies", () => {
     const factory = poolFactory()
     await initPool({ poolSize: 1, headfulPoolSize: 1, createPool: factory.createPool, initCache: async () => {} })
     const deps = getDeps()
+    expect(deps.minTier).toBe(SCRAPE_MIN_TIER)
+    expect(deps.defaultMaxTimeout).toBe(SCRAPE_MAX_TIMEOUT_MS)
     const headless = await deps.acquireBrowser("example.test", 100, { headful: false })
     const headful = await deps.acquireBrowser("example.test", 100, { headful: true })
 
@@ -78,5 +129,170 @@ describe("browser pool dependencies", () => {
     ).rejects.toThrow("xvfb launch failed")
     expect(factory.pools[0]?.events).toEqual(["init", "health", "shutdown"])
     expect(factory.pools[1]?.events).toEqual(["init", "shutdown"])
+  })
+})
+
+describe("session cache recovery", () => {
+  test("creates a working memory cache without a Redis URL", async () => {
+    const recovery = createSessionCacheRecovery({
+      driver: "memory",
+      ttlSeconds: 60,
+      memoryMaxEntries: 1,
+      redisConnectTimeoutMs: 10,
+      redisRetryDelayMs: 10,
+    })
+    expect(recovery).toBeDefined()
+    await recovery?.start()
+
+    const data = { cookies: [], userAgent: "test", savedAt: Date.now() }
+    await recovery?.current()?.save("first.test", data)
+    await recovery?.current()?.save("second.test", data)
+    expect(await recovery?.current()?.load("first.test")).toBeUndefined()
+    expect(await recovery?.current()?.load("second.test")).toEqual(data)
+
+    await recovery?.stop()
+    expect(recovery?.current()).toBeUndefined()
+  })
+
+  test("keeps Redis cache disabled when the default driver has no URL", () => {
+    expect(
+      createSessionCacheRecovery({
+        driver: "redis",
+        ttlSeconds: 60,
+        memoryMaxEntries: 100,
+        redisConnectTimeoutMs: 10,
+        redisRetryDelayMs: 10,
+      }),
+    ).toBeUndefined()
+  })
+
+  test("enables the cache after a failed initial connection without restarting", async () => {
+    let attempts = 0
+    const closed: number[] = []
+    const connected: number[] = []
+    const recovery = new SessionCacheRecovery({
+      createCache: () => {
+        const id = ++attempts
+        return {
+          connect: async () => {
+            if (id === 1) throw new Error("redis still starting")
+          },
+          close: () => closed.push(id),
+          load: async () => undefined,
+          save: async () => {},
+          invalidate: async () => {},
+        }
+      },
+      connectTimeoutMs: 10,
+      retryDelayMs: 5,
+      onConnected: () => connected.push(attempts),
+    })
+
+    await recovery.start()
+    expect(recovery.current()).toBeUndefined()
+    await sleep(15)
+
+    expect(attempts).toBe(2)
+    expect(closed).toEqual([1])
+    expect(connected).toEqual([2])
+    expect(recovery.current()).toBeDefined()
+
+    await recovery.stop()
+    expect(closed).toEqual([1, 2])
+  })
+
+  test("cancels a pending retry during shutdown", async () => {
+    let attempts = 0
+    const recovery = new SessionCacheRecovery({
+      createCache: () => ({
+        connect: async () => {
+          attempts++
+          throw new Error("offline")
+        },
+        close: () => {},
+        load: async () => undefined,
+        save: async () => {},
+        invalidate: async () => {},
+      }),
+      connectTimeoutMs: 10,
+      retryDelayMs: 10,
+    })
+
+    await recovery.start()
+    await recovery.stop()
+    await sleep(20)
+
+    expect(attempts).toBe(1)
+    expect(recovery.current()).toBeUndefined()
+  })
+
+  test("removes a lost cache and reconnects without reusing the old client", async () => {
+    let loseConnection: (() => void) | undefined
+    let closed = 0
+    let reconnected!: () => void
+    const ready = new Promise<void>((resolve) => {
+      reconnected = resolve
+    })
+    const recovery = new SessionCacheRecovery({
+      createCache: () => ({
+        connect: async () => {},
+        close: () => closed++,
+        onLost: (listener) => {
+          loseConnection = listener
+        },
+        load: async () => undefined,
+        save: async () => {},
+        invalidate: async () => {},
+      }),
+      connectTimeoutMs: 10,
+      retryDelayMs: 5,
+      onConnected: () => {
+        if (closed === 1) reconnected()
+      },
+    })
+    await recovery.start()
+    try {
+      const oldCache = recovery.current()
+      const notifyLost = loseConnection
+      expect(notifyLost).toBeDefined()
+      notifyLost?.()
+      expect(recovery.current()).toBeUndefined()
+      expect(recovery.health("redis")).toMatchObject({ state: "unavailable", connected: false })
+      expect(closed).toBe(1)
+      await ready
+      const current = recovery.current()
+      expect(current).toBeDefined()
+      expect(current).not.toBe(oldCache)
+      await recovery.load("example.test")
+      expect(recovery.health("redis")).toMatchObject({ state: "connected", connected: true, lookups: { miss: 1 } })
+      notifyLost?.()
+      expect(recovery.current()).toBe(current)
+    } finally {
+      await recovery.stop()
+    }
+  })
+
+  test("supports intentionally cacheless deployments without a retry loop", async () => {
+    let attempts = 0
+    const recovery = new SessionCacheRecovery({
+      createCache: () => ({
+        connect: async () => {
+          attempts++
+          throw new Error("disabled")
+        },
+        close: () => {},
+        load: async () => undefined,
+        save: async () => {},
+        invalidate: async () => {},
+      }),
+      connectTimeoutMs: 10,
+      retryDelayMs: 0,
+    })
+
+    await recovery.start()
+    await sleep(15)
+
+    expect(attempts).toBe(1)
+    await recovery.stop()
   })
 })

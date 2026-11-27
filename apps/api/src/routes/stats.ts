@@ -1,4 +1,4 @@
-import type { PoolStats } from "@trawl/types"
+import type { PoolStats, StatsResponse } from "@trawl/types"
 import { Elysia } from "elysia"
 import { getHeadfulPool, getPool } from "../deps"
 
@@ -15,7 +15,6 @@ export function statsRoute(
       avgRestarts: 0,
       stalled: 0,
       live: 0,
-      queueDepth: 0,
     }
     // `null` means the optional pool is disabled.
     const headful = getHeadfulStats()
@@ -26,7 +25,9 @@ export function statsRoute(
       stalled: stats.stalled,
       live: stats.live,
       restarts: stats.restarts,
-      queueDepth: stats.queueDepth,
+      queueDepth: stats.queueDepth ?? 0,
+      longestBusyMs: stats.longestBusyMs ?? 0,
+      draining: stats.draining ?? false,
       headful: headful
         ? {
             browsers: headful.total,
@@ -35,8 +36,11 @@ export function statsRoute(
             stalled: headful.stalled,
             live: headful.live,
             restarts: headful.restarts,
+            queueDepth: headful.queueDepth ?? 0,
+            longestBusyMs: headful.longestBusyMs ?? 0,
+            draining: headful.draining ?? false,
           }
         : null,
-    }
+    } satisfies StatsResponse
   })
 }

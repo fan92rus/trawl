@@ -5,20 +5,24 @@ name: Publish
 # per Docker convention (git tag `v1.0.0` -> docker tag `1.0.0`); `:latest`
 # auto-attaches via the default `latest=auto` flavor of `type=semver`.
 #
-# Lives separately from publish-nightly.yml (main branch pushes) and
+# Compact release images omit the optional Windows/macOS font bundles and use
+# Linux fingerprints only. Users who need the complete fingerprint pool can
+# build it explicitly with `CAMOUFOX_KEEP_SPOOFED_OS_FONTS=1`.
+#
+# Lives separately from publish-nightly.yml (dev branch pushes) and
 # publish-baseline.yml (baseline runtime pushes). `v*-baseline` is
 # intentionally excluded so a baseline-only release doesn't also push
-# `:X.Y.Z`/`:latest` — publish-baseline.yml owns that path.
+# `:X.Y.Z`/`:latest` - publish-baseline.yml owns that path.
 #
 # Tag contract:
 #   - push `v*` -> :X.Y.Z + :latest
 #   - push `v*-baseline` -> nothing here (excluded)
-#   - push `main` -> nothing here (handled by publish-nightly.yml)
+#   - branch pushes -> nothing here
 
 on:
   push:
     tags:
-      # Release tags — pure semver only. `v*-baseline` is intentionally excluded
+      # Release tags - pure semver only. `v*-baseline` is intentionally excluded
       # so a baseline-only release (e.g., `v1.0.0-baseline`) does NOT push `:X.Y.Z`
       # or `:latest` from this workflow; publish-baseline.yml owns that path.
       - "v*"
@@ -28,7 +32,15 @@ env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/trawl
 
 jobs:
+  verify:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      resource_tests: true
+
   build:
+    needs: verify
     strategy:
       matrix:
         include:
@@ -64,8 +76,8 @@ jobs:
 
       - name: Sanitize platform name
         run: |
-          platform=${{ matrix.platform }}
-          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+          platform="${{ matrix.platform }}"
+          echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
 
       - uses: docker/build-push-action@v7
         id: build
@@ -76,8 +88,8 @@ jobs:
           push: true
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true
-          cache-from: type=gha,scope=trawl-release-${{ matrix.platform }}
-          cache-to: type=gha,scope=trawl-release-${{ matrix.platform }},mode=max
+          cache-from: type=gha,scope=trawl-release-default-${{ matrix.platform }}
+          cache-to: type=gha,scope=trawl-release-default-${{ matrix.platform }},mode=max
           secrets: |
             GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
 
@@ -133,9 +145,18 @@ jobs:
       - name: Create and push multi-arch manifest
         working-directory: /tmp/digests
         run: |
-          docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.IMAGE }}@sha256:%s ' *)
+          mapfile -t tags < <(jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          tag_args=()
+          for tag in "${tags[@]}"; do
+            tag_args+=("-t" "$tag")
+          done
+
+          sources=()
+          for digest in *; do
+            sources+=("${{ env.IMAGE }}@sha256:$digest")
+          done
+
+          docker buildx imagetools create "${tag_args[@]}" "${sources[@]}"
 
       - name: Inspect manifest
         run: |

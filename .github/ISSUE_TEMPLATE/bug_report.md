@@ -25,7 +25,7 @@ What you expected to happen.
 
 ## Actual behavior
 
-What actually happened — paste the API response, error message, or log excerpt here.
+What actually happened - paste the API response, error message, or log excerpt here.
 
 ## Environment
 
@@ -47,4 +47,4 @@ PASTE LOGS HERE
 
 ## Additional context
 
-Anything else — rate limits hit, network conditions, similar issues that worked before, etc.
+Anything else - rate limits hit, network conditions, similar issues that worked before, etc.

@@ -1,39 +1,87 @@
+import { SHUTDOWN_DRAIN_MS } from "./config"
 import { shutdownPools } from "./deps"
-import { log, Sentry } from "./logger"
+import { Sentry } from "./logger"
 
 export interface LifecycleOptions {
   onShutdown?: () => Promise<void>
 }
 
+export async function stopServer(
+  server: Pick<Bun.Server<unknown>, "stop"> | null | undefined,
+  drainTimeoutMs = SHUTDOWN_DRAIN_MS,
+): Promise<void> {
+  if (!server) return
+  if (drainTimeoutMs === 0) return server.stop(true)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      server.stop(false),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, drainTimeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+    await server.stop(true)
+  }
+}
+
+function isMalformedBrowserPageError(error: unknown): boolean {
+  // Camoufox can omit a page-error location expected by Playwright's dispatcher.
+  if (!(error instanceof TypeError)) return false
+  const stack = error.stack ?? ""
+  if (!/playwright-core[\\/].*(?:browserContextDispatcher|coreBundle)\.js/.test(stack)) return false
+  return (
+    /evaluating ['"]pageError\.location\.url['"]/.test(error.message) ||
+    (/Cannot read properties of (?:undefined|null) \(reading ['"]url['"]\)/.test(error.message) &&
+      /browserContextDispatcher/.test(stack))
+  )
+}
+
 export const registerLifecycleHandlers = (opts: LifecycleOptions = {}): void => {
-  // Camoufox (Firefox) emits page-error events in a shape playwright-core's dispatcher
-  // doesn't expect for some target-page JS errors (e.g. missing `error.location`), which
-  // throws inside the library's own internal event handling — outside any try/catch we
-  // control, since it fires from a page-level event listener, not from our request path.
-  // Without this, one target site's malformed error crashes the entire process and drops
-  // every in-flight request across all clients, not just the one that triggered it.
-  process.on("uncaughtException", (err) => {
-    Sentry.captureException(err)
-    log.api.error({ err }, "uncaughtException (continuing)")
-  })
+  let stopping = false
+  let exitCode = 0
 
-  process.on("unhandledRejection", (reason) => {
-    Sentry.captureException(reason)
-    log.api.error({ err: reason }, "unhandledRejection (continuing)")
-  })
-
-  const shutdown = async () => {
-    if (opts.onShutdown) {
+  const shutdown = async (code = 0) => {
+    exitCode = Math.max(exitCode, code)
+    if (stopping) return
+    stopping = true
+    const deadline = setTimeout(() => process.exit(exitCode || 1), SHUTDOWN_DRAIN_MS + 30_000)
+    try {
       try {
-        await opts.onShutdown()
-      } catch (err) {
-        log.api.error({ err }, "onShutdown error")
+        await opts.onShutdown?.()
+      } finally {
+        // The HTTP server has already used the drain window before pool cleanup.
+        await shutdownPools(0)
       }
+    } catch (error) {
+      exitCode = 1
+      Sentry.captureException(error)
+      console.error("[api] shutdown error:", error)
+    } finally {
+      clearTimeout(deadline)
+      process.exit(exitCode)
     }
-    await shutdownPools()
-    process.exit(0)
   }
 
-  process.on("SIGTERM", shutdown)
-  process.on("SIGINT", shutdown)
+  const handleFailure = (event: string, error: unknown) => {
+    // Fork: report process-level failures to Glitchtip before upstream's graceful
+    // shutdown, so a restart never loses the original error.
+    Sentry.captureException(error)
+    if (isMalformedBrowserPageError(error)) {
+      console.error(`[api] ${event} (malformed browser page error):`, error)
+      return
+    }
+    console.error(`[api] ${event}:`, error)
+    void shutdown(1)
+  }
+
+  process.on("uncaughtException", (error) => handleFailure("uncaughtException", error))
+  process.on("unhandledRejection", (error) => handleFailure("unhandledRejection", error))
+  process.on("SIGTERM", () => {
+    void shutdown()
+  })
+  process.on("SIGINT", () => {
+    void shutdown()
+  })
 }

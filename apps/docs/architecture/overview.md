@@ -6,19 +6,20 @@ description: How TRAWL's API, forward proxy, browser pool, session cache, and ti
 # Architecture Overview
 
 ```
-Client (Prowlarr, curl, browser, your code)
+Client (Prowlarr, MCP client, curl, your code)
            │
       ┌────┴───────────────┐
       ▼                    ▼
  Elysia API          HTTP/HTTPS proxy :8192
  POST /v1            Tier 0 direct forwarding
  POST /scrape        + challenge detection
+ POST /mcp
  GET /health                │ detected wall
       └──────────────┬──────┘
                      ▼
       Orchestrator (packages/tiers)
     ┌──────────────────────────────────────┐
-    │    ├── Tier 1: plain Bun fetch       │
+    │    ├── Tier 1: HTTP + clearance reuse │
     │    ├── Tier 2: cached session + pool │
     │    ├── Tier 3: fresh solve + pool    │
     │    └── Tier 4: residential proxy     │
@@ -29,7 +30,7 @@ Client (Prowlarr, curl, browser, your code)
    (packages/browser)   (packages/browser)
           │                   │
           ▼                   ▼
-     Camoufox            Redis (cache)
+     Camoufox            Redis or memory
      Firefox N×
 ```
 
@@ -37,7 +38,7 @@ Client (Prowlarr, curl, browser, your code)
 
 ### API (`apps/api`)
 
-An Elysia HTTP server. Accepts scrape requests and calls the orchestrator inline — all browser work happens in the same process. Exposes `/` for a FlareSolverr-style readiness message, plus `/health` and `/stats` for monitoring. Routes live under `apps/api/src/routes/`, with shared config/pool state in `config.ts`/`deps.ts`.
+An Elysia HTTP server. Accepts scrape requests and calls the orchestrator inline - all browser work happens in the same process. Exposes `/` for a FlareSolverr-style readiness message, plus `/health` and `/stats` for monitoring. Routes live under `apps/api/src/routes/`, with shared config/pool state in `config.ts`/`deps.ts`.
 
 ### Forward Proxy (`apps/api/src/proxy`)
 
@@ -47,14 +48,16 @@ HTTPS inspection requires clients to trust TRAWL's generated root CA. See [Proxy
 
 ### Browser Pool (`packages/browser/src/pool.ts`)
 
-Maintains a fixed set of `{ browser, context }` pairs using [Camoufox](https://github.com/daijro/camoufox) (Firefox with fingerprint patching at the C++/Juggler level). Acquisition is sticky — if a browser last served `example.com`, it is preferred for the next request to `example.com`. Browsers accumulate domain cookies across requests, which makes subsequent challenges faster.
+Maintains warm browser instances using [Camoufox](https://github.com/daijro/camoufox) (Firefox with fingerprint patching at the C++/Juggler level). Acquisition prefers a browser that last served the same hostname. Fresh solves use temporary contexts; named sessions retain isolated contexts and storage. Automatic clearance reuse is managed separately by the session cache.
 
 ### Session Cache (`packages/browser/src/session.ts`)
 
-Stores `{ cookies, userAgent, savedAt }` in Redis, keyed by hostname (`session:example.com`). The TTL is configurable (default 1 hour). Tier 3 writes to it on every successful challenge solve. Tier 2 reads from it at the start of every request.
+Stores cookies, browser User-Agent, save time, optional proxy identity and direct-origin provenance in Redis or a bounded in-memory backend, keyed by hostname (`session:v2:example.com`). Successful eligible browser requests populate or refresh the entry when cookies are available. Tier 1 can reuse valid direct Cloudflare or supported Anubis clearance over HTTP; Tier 2 can inject cached cookies into the browser when HTTP is unsuitable or rejected. Proxy-bound sessions retain their original configured proxy in an isolated temporary context.
 
-Redis is optional — if `REDIS_URL` is not set, the session cache is disabled and every request escalates to Tier 3.
+The configurable TTL defaults to one hour and does not extend cookie expiry. Named sessions and imported login cookies do not populate the shared cache. See [Session Cache](/architecture/session-cache) for eligibility and fallback rules.
+
+Redis is optional: single-process deployments can select `SESSION_CACHE_DRIVER=memory`. With the default Redis driver, an empty or unset `REDIS_URL` disables shared session caching. Ordinary HTTP still runs; blocked requests need a fresh browser solve.
 
 ### Tiers (`packages/tiers`)
 
-The escalation logic and challenge-specific browser waits. Cloudflare, Akamai Bot Manager, and Imperva/Incapsula walls are detected separately so Tier 3 and Tier 4 can run the appropriate resolution flow. Embedded Turnstile, reCAPTCHA v2, hCaptcha, and GeeTest slide widgets are attempted after the protected page loads. See [Tiered Execution](/architecture/tiered-execution) for the full breakdown.
+The escalation logic, provider-specific detection and browser solving flows. Detected access challenges must resolve before content is returned. Embedded form-widget attempts are controlled separately by `solveEmbeddedCaptchas`: native and MCP scraping default to attempts, while `/v1` defaults to page delivery. See [Tiered Execution](/architecture/tiered-execution) for supported flows and [Performance & Benchmarks](/getting-started/performance) for measured behavior.

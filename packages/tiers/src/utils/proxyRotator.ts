@@ -1,15 +1,18 @@
 // Proxy pool with sticky-per-domain routing, round-robin fallback, and failure cooldown.
-// Sourced from a user-supplied comma-separated list or line-delimited file — TRAWL never
+// Sourced from a user-supplied comma-separated list or line-delimited file - TRAWL never
 // fetches or trusts any third-party proxy list.
 
+import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
 
-const COOLDOWN_MS = 5 * 60 * 1000 // 5 minutes — matches the plan's "time-boxed cooldown"
+export const proxyIdentity = (url: string): string => createHash("sha256").update(url).digest("hex")
+
+const COOLDOWN_MS = 5 * 60 * 1000 // 5 minutes - matches the plan's "time-boxed cooldown"
 
 // Normalizes the per-request `proxy` field at the API boundary into a single URL string.
 // Prowlarr's Cardigann flow serializes proxy config as an object {url, username, password};
 // other callers send a plain URL string. Playwright's `newContext({proxy})` expects
-// `server` to be a string — passing the object through untyped crashes with
+// `server` to be a string - passing the object through untyped crashes with
 // `proxy.server: expected string, got object` (issue #12).
 //
 // Returns undefined for null/undefined/empty/non-string-non-object inputs.
@@ -43,23 +46,28 @@ export function normalizeProxy(input?: unknown) {
 
 interface ProxyState {
   url: string
+  id: string
   badUntil: number
 }
+
+export type ProxySelection = "failover" | "roundrobin" | "random"
 
 export class ProxyPool {
   private proxies: ProxyState[]
   private cursor = 0
   private stickyByDomain = new Map<string, string>()
+  private selection: ProxySelection
 
-  constructor(urls: string[]) {
-    this.proxies = urls.filter(Boolean).map((url) => ({ url, badUntil: 0 }))
+  constructor(urls: string[], selection: ProxySelection = "failover") {
+    this.proxies = urls.filter(Boolean).map((url) => ({ url, id: proxyIdentity(url), badUntil: 0 }))
+    this.selection = selection
   }
 
   // Builds a pool from a comma-separated env var and/or a line-delimited file (one proxy
-  // per line, '#' comments allowed). A single URL still works — it's just a 1-element list.
+  // per line, '#' comments allowed). A single URL still works - it's just a 1-element list.
   // Returns undefined if neither source yields any proxies, so callers can treat "no proxy
   // configured" the same way they did with the old single-string PROXY_URL/RESIDENTIAL_PROXY_URL.
-  static fromEnv(urlListEnv?: string, fileEnv?: string) {
+  static fromEnv(urlListEnv?: string, fileEnv?: string, selection: ProxySelection = "failover") {
     const urls: string[] = []
     if (urlListEnv) {
       urls.push(
@@ -80,11 +88,20 @@ export class ProxyPool {
         console.warn(`[proxy] failed to read proxy list file ${fileEnv}:`, err instanceof Error ? err.message : err)
       }
     }
-    return urls.length > 0 ? new ProxyPool(urls) : undefined
+    return urls.length > 0 ? new ProxyPool(urls, selection) : undefined
   }
 
   get size(): number {
     return this.proxies.length
+  }
+
+  hasAvailable(): boolean {
+    const now = Date.now()
+    return this.proxies.some((proxy) => proxy.badUntil <= now)
+  }
+
+  resolve(id: string): string | undefined {
+    return this.proxies.find((proxy) => proxy.id === id && proxy.badUntil <= Date.now())?.url
   }
 
   private available(): ProxyState[] {
@@ -92,21 +109,34 @@ export class ProxyPool {
     return this.proxies.filter((p) => p.badUntil <= now)
   }
 
-  // Sticky-per-domain: reuse the same proxy for repeat requests to a domain (consistency
-  // helps avoid re-triggering challenges); falls back to round-robin across available
-  // proxies for new domains or once the sticky proxy has been marked bad.
+  private nextRoundRobin(): ProxyState | undefined {
+    const now = Date.now()
+    for (let offset = 0; offset < this.proxies.length; offset++) {
+      const index = (this.cursor + offset) % this.proxies.length
+      const proxy = this.proxies[index]
+      if (proxy && proxy.badUntil <= now) {
+        this.cursor = (index + 1) % this.proxies.length
+        return proxy
+      }
+    }
+  }
+
+  // Selection happens once when a scrape enters a proxy-backed tier. The orchestrator
+  // keeps that result fixed for the attempt, including a headful retry. A blocked
+  // attempt may call next() again after markBad() to perform its bounded failover.
   next(domain?: string) {
     const available = this.available()
     if (available.length === 0) return
 
-    if (domain) {
+    if (this.selection === "failover" && domain) {
       const sticky = this.stickyByDomain.get(domain)
       if (sticky && available.some((p) => p.url === sticky)) return sticky
     }
 
-    const proxy = available[this.cursor % available.length]
-    this.cursor = (this.cursor + 1) % available.length
-    if (domain) this.stickyByDomain.set(domain, proxy.url)
+    const proxy =
+      this.selection === "random" ? available[Math.floor(Math.random() * available.length)] : this.nextRoundRobin()
+    if (!proxy) return
+    if (this.selection === "failover" && domain) this.stickyByDomain.set(domain, proxy.url)
     return proxy.url
   }
 
@@ -116,7 +146,7 @@ export class ProxyPool {
     return available[Math.floor(Math.random() * available.length)].url
   }
 
-  // Puts a proxy in cooldown after a tier reports "blocked"/"ip-blocked" for it — skipped
+  // Puts a proxy in cooldown after a tier reports "blocked"/"ip-blocked" for it - skipped
   // by next()/random() until the cooldown expires. Also drops any sticky-domain mapping
   // pointing at it so the next call for that domain picks a different proxy.
   markBad(url: string): void {

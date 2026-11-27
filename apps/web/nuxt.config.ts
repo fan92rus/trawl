@@ -1,8 +1,4 @@
-const title = "Self-Hosted Web Scraping & Challenge Bypass"
-const description =
-  "Adaptive, self-hosted web scraping engine for Cloudflare, Akamai, Imperva, and CAPTCHA-protected sites, with a challenge-aware HTTP/HTTPS proxy."
-const socialDescription =
-  "Scrape protected websites with adaptive HTTP and browser tiers, CAPTCHA handling, session caching, and a challenge-aware proxy."
+import { siteDescription as description, siteTitle as title } from "./app/utils/site"
 
 export default defineNuxtConfig({
   compatibilityDate: "2026-06-23",
@@ -39,21 +35,21 @@ export default defineNuxtConfig({
 
   seo: {
     meta: {
-      description,
       themeColor: "#00e87a",
-      ogType: "website",
-      ogTitle: `TRAWL — ${title}`,
-      ogDescription: socialDescription,
+      ogTitle: `TRAWL - ${title}`,
+      ogDescription: description,
       twitterCard: "summary_large_image",
-      twitterTitle: `TRAWL — ${title}`,
-      twitterDescription:
-        "An adaptive web scraping engine for protected sites, with CAPTCHA handling and a general HTTP/HTTPS proxy.",
+      twitterTitle: `TRAWL - ${title}`,
+      twitterDescription: description,
     },
   },
 
   ogImage: {
     enabled: false,
   },
+
+  aiReady: false,
+  skewProtection: false,
 
   robots: {
     credits: false,
@@ -90,9 +86,9 @@ export default defineNuxtConfig({
       title,
       templateParams: {
         siteName: "TRAWL",
-        separator: "—",
+        separator: "-",
       },
-      link: [{ rel: "icon", type: "image/svg+xml", href: "/favicon.svg" }],
+      link: [{ rel: "icon", type: "image/png", sizes: "512x512", href: "/favicon.png" }],
     },
   },
 })

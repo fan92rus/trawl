@@ -1,34 +1,39 @@
 import type { BrowserHandle } from "@trawl/browser"
-import type { Cookie, SessionData, TierResult } from "@trawl/types"
+import { closeTemporaryContext, newFreshContext } from "@trawl/browser"
+import type { Cookie, SessionData } from "@trawl/types"
+import { capturePageFavicons } from "../favicons"
 import { solvePageCaptchas } from "../solvers"
+import { isAnubisVerificationUrl } from "../utils/anubis"
+import { waitForAnubisResolution } from "../utils/anubisWait"
+import { waitForBaxiaNavigation } from "../utils/baxiaWait"
+import { reportBlocked } from "../utils/blockedEvidence"
+import { captureBrowserDocument, waitForBrowserLoad } from "../utils/browserCapture"
+import { persistentBrowserWall } from "../utils/browserWall"
+import { widgetOutcomes } from "../utils/captchaOutcomes"
+import { attachPageCapture, type CaptureOptions } from "../utils/capture"
 import { normalizeSameSite, toCookies } from "../utils/cookies"
+import { DeadlineError, RequestBudget } from "../utils/deadline"
 import {
   hasAkamaiChallenge,
+  hasAnubisChallenge,
   hasDataDomeChallenge,
   isBlocked,
   isBrowserErrorPage,
   isCloudflarePage,
 } from "../utils/detect"
-import { normalizeHtml } from "../utils/html"
+import { isGoogleSorryUrl } from "../utils/googleSorry"
 import { trackMainDocumentResponses } from "../utils/mainResponse"
-import { captureResponse, isTextContentType } from "../utils/response"
+import { followMetaRefresh } from "../utils/metaRefresh"
+import { installOutboundPolicy, type OutboundUrlValidator } from "../utils/outboundPolicy"
+import { installPostReplayRoute } from "../utils/postReplay"
+import { browserDocumentHtml, captureResponse, isHtmlContentType } from "../utils/response"
 import type { RouteLike } from "../utils/sanitize"
 import { routeContinueOverrides } from "../utils/sanitize"
+import type { BrowserTierResult } from "./browserResult"
 
-export interface Tier2Result extends TierResult {
-  tier: 2
-  challenge?: "datadome"
-  effectiveUrl?: string
-  html?: string
-  body?: Uint8Array
-  responseHeaders?: Record<string, string>
-  contentType?: string
-  cookies?: Cookie[]
-  statusCode?: number
-  captchasSolved?: string[]
-}
+export type Tier2Result = BrowserTierResult<2>
 
-export async function runTier2(
+async function runTier2Task(
   url: string,
   handle: BrowserHandle,
   session: SessionData,
@@ -36,23 +41,53 @@ export async function runTier2(
   extraHeaders?: Record<string, string>,
   method?: string,
   body?: string,
-  requestCookies?: Cookie[],
+  validateOutboundUrl?: OutboundUrlValidator,
+  screenshot?: boolean,
+  capture: CaptureOptions = {},
+  proxyUrl?: string,
 ): Promise<Tier2Result> {
   const start = Date.now()
-  const activeContext = handle.context
+  let activeContext = handle.context
+  let openingContext: ReturnType<typeof newFreshContext> | undefined
   let page: Awaited<ReturnType<typeof activeContext.newPage>> | undefined
+  let openingPage: ReturnType<typeof activeContext.newPage> | undefined
 
+  const budget = capture.budget
+  if (!budget) throw new Error("Browser task requires an operation budget")
+  let cleanup: Promise<void> | undefined
+  const close = () =>
+    (cleanup ??= closeTemporaryContext(
+      proxyUrl || capture.networkProxy ? openingContext : (openingPage ?? page),
+      handle.requestBrowserReplacement,
+      "tier2 page cleanup timed out",
+    ))
+  let disown = () => {}
   try {
-    page = await activeContext.newPage()
+    budget.check()
+    disown = budget.own(close)
+    if (proxyUrl || capture.networkProxy) {
+      const transportProxy = capture.networkProxy
+        ? await budget.run(async () => capture.networkProxy?.(proxyUrl))
+        : proxyUrl
+      openingContext = newFreshContext(handle.browser, {
+        proxy: transportProxy,
+        onCreated: handle.noteTemporaryContext,
+        requestReplacement: handle.requestBrowserReplacement,
+      })
+      activeContext = await openingContext
+      budget.check()
+    }
+    openingPage = activeContext.newPage()
+    page = await openingPage
+    budget.check()
+    page.setDefaultTimeout?.(Math.max(1, budget.remaining()))
+    await installOutboundPolicy(page, validateOutboundUrl)
 
     // addCookies replaces cookies by name+domain+path, so no need to clearCookies first.
     // Keeping the context's CF cookies (cf_clearance, __cf_bm) intact means CF sees a
     // browser with history, which speeds up challenge evaluation on the next Tier 3 run.
-    // Request cookies (auth/session, e.g. rutracker bb_session) come first so they take
-    // precedence over any stale cached values with the same name+domain+path.
-    const merged = [...(requestCookies ?? []), ...session.cookies]
     await activeContext.addCookies(
-      merged.map((c) => ({
+      session.cookies.map((c) => ({
         name: c.name,
         value: c.value,
         domain: c.domain,
@@ -66,18 +101,51 @@ export async function runTier2(
 
     await page.setExtraHTTPHeaders({ "User-Agent": session.userAgent })
 
-    if ((extraHeaders && Object.keys(extraHeaders).length > 0) || method === "POST") {
+    if (capture.postReplay) {
+      await installPostReplayRoute(page, url, extraHeaders, body, capture.postReplay)
+    } else if ((extraHeaders && Object.keys(extraHeaders).length > 0) || method === "POST") {
       await page.route(url, (route: RouteLike) => {
         route.continue(routeContinueOverrides(route, extraHeaders, method, body))
       })
     }
 
-    const mainResponse = trackMainDocumentResponses(page)
+    const pageCapture = attachPageCapture(page, capture)
+    const mainResponse = trackMainDocumentResponses(page, { redirectChain: capture.redirectChain })
 
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: maxTimeout })
-    await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => {})
-
-    const html = await page.content()
+    let html = await page.content()
+    if (capture.followMetaRefresh && !hasAnubisChallenge(html)) {
+      const refresh = await followMetaRefresh(page, budget.remaining(), validateOutboundUrl)
+      if (refresh.status !== "ok") {
+        return { tier: 2, status: refresh.status, durationMs: Date.now() - start, reason: refresh.reason }
+      }
+      html = await page.content()
+    }
+    const anubis = hasAnubisChallenge(html)
+    if (!anubis && !isBlocked(mainResponse.status, html)) {
+      if (capture.anubisDetected) {
+        const resolution = await waitForAnubisResolution(page, budget.remaining())
+        if (resolution === "timeout" || resolution === "browser-closed") {
+          return {
+            tier: 2,
+            status: resolution === "timeout" ? "timeout" : "error",
+            reason: `anubis-${resolution}`,
+            durationMs: Date.now() - start,
+          }
+        }
+      } else await waitForBrowserLoad(page, capture, budget, 8000)
+      html = await page.content()
+    }
+    if (hasAnubisChallenge(html)) {
+      const reason = "anubis-session-expired"
+      await reportBlocked(
+        page,
+        capture.blockedEvidence,
+        { tier: 2, status: "blocked", reason, statusCode: mainResponse.status, html },
+        budget.remaining(),
+      )
+      return { tier: 2, status: "blocked", durationMs: Date.now() - start, reason }
+    }
 
     if (isBrowserErrorPage(html)) {
       return {
@@ -89,18 +157,54 @@ export async function runTier2(
     }
 
     if (isCloudflarePage(html, mainResponse.headers)) {
+      await reportBlocked(
+        page,
+        capture.blockedEvidence,
+        {
+          tier: 2,
+          status: "blocked",
+          reason: "session-expired",
+          statusCode: mainResponse.status,
+          html,
+        },
+        budget.remaining(),
+      )
       return { tier: 2, status: "blocked", durationMs: Date.now() - start, reason: "session-expired" }
     }
 
-    // A cached session that lands back on Akamai's interstitial is stale — force a
+    // A cached session that lands back on Akamai's interstitial is stale - force a
     // fresh Tier-3 solve rather than returning the ~2KB challenge stub as content.
     if (hasAkamaiChallenge(html)) {
+      await reportBlocked(
+        page,
+        capture.blockedEvidence,
+        {
+          tier: 2,
+          status: "blocked",
+          reason: "akamai-session-expired",
+          statusCode: mainResponse.status,
+          html,
+        },
+        budget.remaining(),
+      )
       return { tier: 2, status: "blocked", durationMs: Date.now() - start, reason: "akamai-session-expired" }
     }
 
     // Same reasoning for DataDome: isBlocked() already catches the 403, but a stale
     // `datadome` cookie is worth telling apart from any other 403 in the logs.
     if (hasDataDomeChallenge(html)) {
+      await reportBlocked(
+        page,
+        capture.blockedEvidence,
+        {
+          tier: 2,
+          status: "blocked",
+          reason: "datadome-session-expired",
+          statusCode: mainResponse.status,
+          html,
+        },
+        budget.remaining(),
+      )
       return {
         tier: 2,
         status: "blocked",
@@ -111,22 +215,122 @@ export async function runTier2(
     }
 
     if (isBlocked(mainResponse.status, html)) {
-      return { tier: 2, status: "blocked", durationMs: Date.now() - start, reason: `http-${mainResponse.status}` }
+      const reason = `http-${mainResponse.status}`
+      await reportBlocked(
+        page,
+        capture.blockedEvidence,
+        {
+          tier: 2,
+          status: "blocked",
+          reason,
+          statusCode: mainResponse.status,
+          html,
+        },
+        budget.remaining(),
+      )
+      return { tier: 2, status: "blocked", durationMs: Date.now() - start, reason }
     }
 
     // Attempt to solve any embedded captcha widgets (Turnstile, reCAPTCHA, hCaptcha).
     // Pages that load cleanly via session cache may still have in-page challenge widgets.
-    const solveRemaining = maxTimeout - (Date.now() - start)
+    // Embedded widgets are best effort; leave time to return the loaded document.
+    const solveRemaining = Math.max(0, budget.remaining() - 2000)
     let captchasSolved: string[] = []
-    if (solveRemaining > 5000) {
-      const result = await solvePageCaptchas(page, solveRemaining).catch(() => ({ attempted: [], solved: [] }))
+    if (capture.solveEmbeddedCaptchas !== false && budget.remaining() > 5000) {
+      const result = await solvePageCaptchas(
+        page,
+        solveRemaining,
+        budget.signal,
+        capture.externalCaptcha,
+        proxyUrl,
+      ).catch(() => ({
+        attempted: [],
+        solved: [],
+      }))
       captchasSolved = result.solved
+      capture.captchaOutcomes?.(widgetOutcomes(result.attempted, result.solved))
     }
 
-    const finalHtml = await page.content()
+    if (captchasSolved.includes("baxia-nc"))
+      await waitForBaxiaNavigation(page, Math.min(2000, budget.remaining()), budget.signal, () => mainResponse.headers)
+
+    const {
+      html: finalHtml,
+      shot,
+      evidence,
+    } = await captureBrowserDocument(page, capture, pageCapture, budget, screenshot)
+    if (hasAnubisChallenge(finalHtml) || isAnubisVerificationUrl(page.url())) {
+      const reason = "anubis-persistent"
+      await reportBlocked(
+        page,
+        capture.blockedEvidence,
+        { tier: 2, status: "blocked", reason, statusCode: mainResponse.status, html: finalHtml, screenshot: shot },
+        budget.remaining(),
+      )
+      return { tier: 2, status: "blocked", durationMs: Date.now() - start, reason }
+    }
+    if (isGoogleSorryUrl(page.url())) {
+      const reason = "google-sorry-persistent"
+      await reportBlocked(
+        page,
+        capture.blockedEvidence,
+        {
+          tier: 2,
+          status: "blocked",
+          reason,
+          statusCode: mainResponse.status,
+          html: finalHtml,
+          screenshot: shot,
+        },
+        budget.remaining(),
+      )
+      return { tier: 2, status: "blocked", durationMs: Date.now() - start, reason }
+    }
     if (isCloudflarePage(finalHtml, mainResponse.headers)) {
+      await reportBlocked(
+        page,
+        capture.blockedEvidence,
+        {
+          tier: 2,
+          status: "blocked",
+          reason: "session-expired",
+          statusCode: mainResponse.status,
+          html: finalHtml,
+          screenshot: shot,
+        },
+        budget.remaining(),
+      )
       return { tier: 2, status: "blocked", durationMs: Date.now() - start, reason: "session-expired" }
     }
+
+    const wall = persistentBrowserWall(
+      finalHtml,
+      page.url(),
+      mainResponse.headers,
+      mainResponse.status,
+      "none",
+      captchasSolved,
+    )
+    if (wall?.reason === "baxia-persistent") {
+      await reportBlocked(
+        page,
+        capture.blockedEvidence,
+        {
+          tier: 2,
+          status: "blocked",
+          reason: wall.reason,
+          statusCode: mainResponse.status,
+          html: finalHtml,
+          screenshot: shot,
+        },
+        budget.remaining(),
+      )
+      return { tier: 2, status: "blocked", durationMs: Date.now() - start, ...wall }
+    }
+
+    // After the capture is drained, so these fetches never land in the captured
+    // responses, the network log or the MHTML archive.
+    const icons = capture.favicons ? await capturePageFavicons(page, budget.remaining()) : undefined
 
     const cookies: Cookie[] = toCookies(await activeContext.cookies())
 
@@ -137,13 +341,16 @@ export async function runTier2(
       status: "success",
       durationMs: Date.now() - start,
       effectiveUrl: page.url(),
-      // For HTML/text content-types, `html` is the rendered DOM. For binary, leave
-      // empty so /scrape consumers know to use `body`/`contentType`.
-      html: !captured.contentType || isTextContentType(captured.contentType) ? normalizeHtml(finalHtml) : "",
+      html: browserDocumentHtml(captured.contentType, finalHtml, captured.body),
       ...captured,
       cookies,
       statusCode: mainResponse.status,
       captchasSolved: captchasSolved.length > 0 ? captchasSolved : undefined,
+      screenshot: shot,
+      favicons: icons,
+      ...evidence,
+      redirectChain: capture.redirectChain ? mainResponse.redirectChain : undefined,
+      mhtml: isHtmlContentType(captured.contentType) ? pageCapture.archive(page.url(), finalHtml) : undefined,
     }
   } catch (err) {
     return {
@@ -153,6 +360,23 @@ export async function runTier2(
       reason: err instanceof Error ? err.message : String(err),
     }
   } finally {
-    await page?.close().catch(() => {})
+    await close()
+    disown()
+  }
+}
+
+export async function runTier2(...args: Parameters<typeof runTier2Task>): Promise<Tier2Result> {
+  const started = Date.now()
+  const capture = args[9] ?? {}
+  const budget = capture.budget ?? new RequestBudget(args[3])
+  args[9] = { ...capture, budget }
+  try {
+    return await budget.run(() => runTier2Task(...args))
+  } catch (error) {
+    if (error instanceof DeadlineError)
+      return { tier: 2, status: "timeout", reason: error.message, durationMs: Date.now() - started }
+    throw error
+  } finally {
+    if (!capture.budget) budget.dispose()
   }
 }

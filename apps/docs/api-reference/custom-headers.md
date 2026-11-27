@@ -54,10 +54,14 @@ headers and strips only hop-by-hop connection headers.
 
 | Tier                                      | Mechanism                           | Scope                            |
 | ----------------------------------------- | ----------------------------------- | -------------------------------- |
-| **Tier 1** — plain HTTP fetch             | Spread into `fetch()` headers       | All requests (there is only one) |
-| **Tier 2** — cached browser session       | `page.route(url, ...)` interception | Main document request only       |
-| **Tier 3** — fresh challenge solve        | `page.route(url, ...)` interception | Main document request only       |
-| **Tier 4** — residential proxy escalation | `page.route(url, ...)` interception | Main document request only       |
+| **Tier 1** - plain HTTP fetch             | Case-insensitive default overrides | All requests (there is only one) |
+| **Tier 2** - cached browser session       | `page.route(url, ...)` interception | Main document request only       |
+| **Tier 3** - fresh challenge solve        | `page.route(url, ...)` interception | Main document request only       |
+| **Tier 4** - residential proxy escalation | `page.route(url, ...)` interception | Main document request only       |
+
+Tier 1 honors the caller's `Accept-Encoding` instead of adding its browser defaults to it.
+The forward proxy retains the negotiated encoding and original response bytes. An explicit empty
+`Accept-Encoding` requests an unencoded response; omitting the header retains the browser defaults.
 
 For browser tiers, route interception is scoped to the **exact target URL**. Subresources (JS, CSS,
 images, fonts, third-party CDNs) and provider challenge endpoints are not given the caller's custom
@@ -68,7 +72,7 @@ headers.
 When a page requires both challenge bypass and custom headers, the sequence is:
 
 ```
-1. page.goto(url) — route fires, custom headers added to initial request
+1. page.goto(url) - route fires, custom headers added to initial request
 2. The WAF serves a challenge interstitial
 3. Provider scripts run on their own endpoints without caller headers
 4. The browser completes the supported challenge flow and returns to the target

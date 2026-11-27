@@ -1,57 +1,4 @@
 <script lang="ts" setup>
-const barsVisible = shallowRef(false)
-const benchGrid = useTemplateRef<HTMLElement>("benchGrid")
-let benchmarkObserver: IntersectionObserver
-
-onMounted(() => {
-  if (!benchGrid.value) return
-  benchmarkObserver = new IntersectionObserver(
-    (entries) => {
-      if (entries[0]?.isIntersecting) {
-        barsVisible.value = true
-        benchmarkObserver.disconnect()
-      }
-    },
-    { threshold: 0.2 },
-  )
-  benchmarkObserver.observe(benchGrid.value)
-})
-
-onBeforeUnmount(() => benchmarkObserver?.disconnect())
-
-const benchmarks = [
-  {
-    url: "nowsecure.nl",
-    type: "No CF protection (Tier 1)",
-    maxMs: 3100,
-    results: [
-      { name: "TRAWL", ms: 200, label: "0.2s", winner: true },
-      { name: "FlareSolverr", ms: 2600, label: "2.6s", winner: false },
-      { name: "Byparr", ms: 3100, label: "3.1s", winner: false },
-    ],
-  },
-  {
-    url: "iplocation.net",
-    type: "Cloudflare interstitial (Tier 3)",
-    maxMs: 18700,
-    results: [
-      { name: "TRAWL", ms: 4200, label: "4.2s", winner: true },
-      { name: "FlareSolverr", ms: 11300, label: "11.3s", winner: false },
-      { name: "Byparr", ms: 18700, label: "18.7s", winner: false },
-    ],
-  },
-  {
-    url: "nopecha.com/demo/cloudflare",
-    type: "CF + Turnstile (Tier 3)",
-    maxMs: 18200,
-    results: [
-      { name: "TRAWL", ms: 5900, label: "5.9s", winner: true },
-      { name: "FlareSolverr", ms: 13200, label: "13.2s", winner: false },
-      { name: "Byparr", ms: 18200, label: "18.2s", winner: false },
-    ],
-  },
-]
-
 type CellTone = "check" | "cross" | "partial"
 interface ComparisonCell {
   text: string
@@ -74,70 +21,91 @@ const rows = [
     feature: "Challenge proxy",
     trawl: cell("check", "HTTP/S, WebSockets, Range"),
     flaresolver: cell("cross", "API only"),
-    byparr: cell("cross", "API only"),
+    byparr: cell("cross", "API + web loader"),
   },
   {
     icon: "↝",
     feature: "Proxy escalation",
-    trawl: cell("check", "DC → residential"),
-    flaresolver: cell("partial", "Manual proxy"),
-    byparr: cell("partial", "Manual proxy"),
+    trawl: cell("check", "Automatic fallback to a residential proxy"),
+    flaresolver: cell("partial", "Manual proxy selection"),
+    byparr: cell("partial", "Manual proxy selection"),
   },
   {
     icon: "◎",
-    feature: "Session reuse",
-    trawl: cell("check", "Redis by domain"),
-    flaresolver: cell("partial", "Manual sessions"),
-    byparr: cell("cross", "No domain cache"),
+    feature: "Domain clearance cache",
+    trawl: cell("check", "Accepted sessions cached by domain"),
+    flaresolver: cell("partial", "Explicit named sessions"),
+    byparr: cell("cross", "No shared domain cache"),
   },
   {
     icon: "▣",
-    feature: "Browser pool",
-    trawl: cell("check", "Configurable and warm"),
-    flaresolver: cell("partial", "Temporary or session"),
-    byparr: cell("cross", "New browser per request"),
+    feature: "Warm browser pool",
+    trawl: cell("check", "Configurable pool; one browser by default"),
+    flaresolver: cell("partial", "Temporary or named-session browsers"),
+    byparr: cell("cross", "Browser created per request"),
   },
   {
     icon: "⟳",
-    feature: "Pool lifecycle",
-    trawl: cell("check", "Health checks + recycling"),
-    flaresolver: cell("cross", "No warm pool"),
-    byparr: cell("cross", "No warm pool"),
+    feature: "Pool recovery",
+    trawl: cell("check", "Health checks, recycling and crash recovery"),
+    flaresolver: cell("cross", "No shared warm pool"),
+    byparr: cell("cross", "No shared warm pool"),
   },
   {
     icon: "⊕",
-    feature: "Custom headers",
-    trawl: cell("check", "Safe across all tiers"),
-    flaresolver: cell("cross", "Not supported"),
-    byparr: cell("cross", "Not supported"),
+    feature: "Target request headers",
+    trawl: cell("check", "Custom headers across all scraping tiers"),
+    flaresolver: cell("cross", "Parameter deprecated; not forwarded"),
+    byparr: cell("cross", "No target-header field"),
+  },
+  {
+    icon: "◎",
+    feature: "Browser sessions",
+    trawl: cell("check", "Native, MCP and /v1; domain cache"),
+    flaresolver: cell("partial", "Permanent /v1 sessions"),
+    byparr: cell("partial", "FlareSolverr-compatible request API"),
   },
   {
     icon: "◈",
     feature: "Browser engine",
-    trawl: cell("check", "Camoufox"),
-    flaresolver: cell("partial", "Chrome + UDC"),
-    byparr: cell("check", "Camoufox"),
+    trawl: cell("check", "Camoufox Firefox"),
+    flaresolver: cell("check", "Chrome + undetected-chromedriver"),
+    byparr: cell("check", "InvisiblePlaywright"),
   },
   {
     icon: "◇",
-    feature: "/v1 API",
-    trawl: cell("check", "GET + POST"),
-    flaresolver: cell("check", "Native"),
-    byparr: cell("partial", "GET only"),
+    feature: "Native MCP",
+    trawl: cell("check", "Six Streamable HTTP MCP tools"),
+    flaresolver: cell("cross", "Not documented"),
+    byparr: cell("cross", "Not documented; Open WebUI loader"),
+  },
+  {
+    icon: "▣",
+    feature: "Local dashboard",
+    trawl: cell("check", "Persistent metrics and live history"),
+    flaresolver: cell("cross", "No documented dashboard; Prometheus metrics"),
+    byparr: cell("cross", "Not documented"),
+  },
+  {
+    icon: "⊕",
+    feature: "Page outputs",
+    trawl: cell("check", "HTML, Markdown, CSS-selected JSON, screenshots"),
+    flaresolver: cell("partial", "HTML, cookies and screenshots"),
+    byparr: cell("partial", "HTML, cookies and Open WebUI loader"),
+  },
+  {
+    icon: "⬡",
+    feature: "Dedicated challenge flows",
+    trawl: cell("check", "Cloudflare, Akamai, Imperva, Anubis and more"),
+    flaresolver: cell("partial", "Cloudflare and DDoS-Guard"),
+    byparr: cell("partial", "Cloudflare interstitial and Turnstile"),
   },
   {
     icon: "○",
-    feature: "Paid solver APIs",
-    trawl: cell("check", "Not required"),
-    flaresolver: cell("check", "Not required"),
-    byparr: cell("check", "Not required"),
-  },
-  {
-    icon: "⌂",
-    feature: "Self-hosted",
-    trawl: cell("check", "Yes"),
-    flaresolver: cell("check", "Yes"),
-    byparr: cell("check", "Yes"),
+    feature: "Paid solver",
+    trawl: cell("check", "Local first; optional 2Captcha"),
+    flaresolver: cell("partial", "Not required for browser solving"),
+    byparr: cell("partial", "Not required for browser solving"),
   },
 ]
 </script>
@@ -146,43 +114,15 @@ const rows = [
   <section id="compare" class="section">
     <div class="container">
       <p class="eyebrow">benchmarks</p>
-      <h2 class="section-title">Less browser overhead. More ways through.</h2>
+      <h2 class="section-title">Clear Cloudflare. Keep the next request fast.</h2>
       <p class="section-lead">
-        Compare real request timings and the paths each engine can take—from direct HTTP to full browser solving and
-        proxy escalation.
+        Real sites behind Cloudflare interstitials, tested through the same API. Reuse accepted sessions and get the
+        page content without repeating the expensive work.
       </p>
 
-      <div ref="benchGrid" class="bench-grid">
-        <div
-          v-for="b in benchmarks"
-          :key="b.url"
-          v-motion
-          :initial="{ opacity: 0, y: 16 }"
-          :visible-once="{ opacity: 1, y: 0, transition: { duration: 400 } }"
-          class="bench-card"
-        >
-          <div class="bench-url">{{ b.url }}</div>
-          <div class="bench-type">{{ b.type }}</div>
-          <div class="bench-bars">
-            <div v-for="r in b.results" :key="r.name" class="bench-row">
-              <span class="bench-name" :class="{ 'bench-winner': r.winner }">{{ r.name }}</span>
-              <div class="bench-bar-wrap">
-                <div
-                  class="bench-bar"
-                  :class="{ 'bench-bar-winner': r.winner }"
-                  :style="{ width: barsVisible ? `${(r.ms / b.maxMs) * 100}%` : '0%' }"
-                />
-              </div>
-              <span class="bench-ms" :class="{ 'accent': r.winner }">{{ r.label }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <p class="benchmark-note">
-        Measurements recorded on the same machine and network. They are illustrative, not guarantees; live results vary
-        with target protection, IP reputation, software versions, and session state. Capability rows were reviewed
-        against the upstream projects.
+      <BenchmarkResults />
+      <p class="benchmark-note comparison-source">
+        Green: included. Orange: a different or more limited approach. Muted: no dedicated functionality.
       </p>
 
       <div class="table-wrap" style="margin-top: 56px;">
@@ -257,89 +197,11 @@ const rows = [
 }
 
 .benchmark-note {
-  max-width: 760px;
-  margin-bottom: 48px;
+  max-width: 950px;
+  margin-top: 24px;
 }
-
-/* ── Benchmark cards ── */
-.bench-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1px;
-  background: var(--border);
-}
-
-.bench-card {
-  background: var(--bg);
-  padding: 28px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.bench-url {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text);
-  letter-spacing: 0.01em;
-}
-
-.bench-type {
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  margin-top: -8px;
-}
-
-.bench-bars {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.bench-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.bench-name {
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-  min-width: 72px;
-  flex-shrink: 0;
-}
-
-.bench-winner {
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.bench-bar-wrap {
-  flex: 1;
-  height: 4px;
-  background: var(--border);
-}
-
-.bench-bar {
-  height: 100%;
-  background: var(--border-strong);
-  transition: width 1.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.bench-bar-winner {
-  background: var(--accent);
-}
-
-.bench-ms {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-muted);
-  min-width: 36px;
-  text-align: right;
-  flex-shrink: 0;
+.comparison-source {
+  margin-top: 16px;
 }
 
 /* ── Feature table ── */
@@ -351,6 +213,7 @@ const rows = [
 table {
   width: 100%;
   table-layout: fixed;
+  min-width: 760px;
   border-collapse: collapse;
   font-size: 12px;
 }
@@ -372,7 +235,9 @@ td {
   padding: 11px 14px;
   text-align: left;
   border-bottom: 1px solid var(--border);
-  white-space: nowrap;
+  white-space: normal;
+  line-height: 1.75;
+  vertical-align: top;
 }
 
 th {
@@ -441,13 +306,14 @@ tr:hover .col-trawl {
 }
 
 @media (max-width: 800px) {
-  .bench-grid {
-    grid-template-columns: 1fr;
-  }
-
   table {
     min-width: 860px;
     table-layout: auto;
   }
+}
+.benchmark-note a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 </style>

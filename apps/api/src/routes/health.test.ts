@@ -15,10 +15,43 @@ const stats = (live: number): PoolStats => ({
 
 describe("GET /health", () => {
   test("returns 200 while the pool has live capacity", async () => {
-    const response = await healthRoute(() => stats(1)).handle(new Request("http://localhost/health"))
+    const response = await healthRoute(
+      () => stats(1),
+      () => ({
+        currentBytes: 10,
+        limitBytes: 100,
+        recommendedLimitBytes: 200,
+        underProvisioned: true,
+        oomEvents: 2,
+        oomKills: 1,
+      }),
+      () => ({
+        driver: "redis",
+        enabled: true,
+        connected: false,
+        state: "unavailable",
+        lastConnectedAt: null,
+        connectFailures: 1,
+        lookups: { hit: 0, miss: 0, error: 0 },
+        writes: { ok: 0, error: 0 },
+      }),
+    ).handle(new Request("http://localhost/health"))
 
     expect(response.status).toBe(200)
-    expect(await response.json()).toMatchObject({ status: "ok", pool: { live: 1 } })
+    expect(await response.json()).toMatchObject({
+      status: "ok",
+      cache: { enabled: true, connected: false, state: "unavailable", connectFailures: 1 },
+      pool: { live: 1 },
+      memory: { underProvisioned: true, oomKills: 1 },
+    })
+  })
+
+  test("stays ready while an optional idle browser is retired", async () => {
+    const response = await healthRoute(() => ({ ...stats(0), sleeping: 1 })).handle(
+      new Request("http://localhost/health"),
+    )
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ status: "ok", pool: { live: 0, sleeping: 1 } })
   })
 
   test("returns 503 when no live capacity remains", async () => {

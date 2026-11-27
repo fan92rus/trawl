@@ -1,11 +1,20 @@
-import { encodeCp1251 } from "@trawl/tiers"
-import type { ScrapeResult } from "@trawl/types"
+import { encodeCp1251, isCharsetLessUtf8HtmlFragment } from "@trawl/tiers"
+import type { BlockedEvidence, ScrapeResult } from "@trawl/types"
 
 export interface ProxyBufferedResponse {
   body: Buffer
   contentType: string
   headers: Record<string, string>
 }
+
+export interface ProxyBlockedResponse {
+  body: Buffer
+  contentType: string
+  headers: Record<string, string>
+  statusCode: number
+}
+
+const BODYLESS_STATUS_CODES = new Set([204, 205, 304])
 
 const TRANSFORMED_BODY_HEADERS = new Set([
   "content-encoding",
@@ -22,62 +31,19 @@ function isHtml(contentType: string): boolean {
   return base === "text/html" || base === "application/xhtml+xml"
 }
 
-// Some indexers (Prowlarr's RuTracker parser) decode responses as windows-1251
-// regardless of upstream charset. When the browser renders a cp1251 page, TRAWL
-// hands it back as a UTF-8 JS string — sending those bytes makes the parser see
-// mojibake. `cp1251Hosts` (set membership checked by hostname) opts specific
-// domains into re-encoding the rendered HTML to windows-1251.
-export function responseFromScrapeResult(
-  result: ScrapeResult,
-  cp1251Hosts?: ReadonlySet<string>,
-): ProxyBufferedResponse {
-  const contentType = result.contentType ?? result.responseHeaders?.["content-type"] ?? "text/html; charset=utf-8"
+function utf8ContentType(contentType: string): string {
+  // Keep other MIME parameters, including quoted values containing semicolons.
+  const parts = contentType.match(/(?:[^;"']|"[^"]*"|'[^']*')+/g) ?? []
+  const retained = parts.map((part) => part.trim()).filter((part, index) => index === 0 || !/^charset\s*=/i.test(part))
+  return `${retained.join("; ")}; charset=utf-8`
+}
 
-  // Decide whether to use the browser-rendered DOM (result.html) or the raw HTTP
-  // response body (result.body). The rendered DOM is normally richer (JS-executed),
-  // but right after a Cloudflare challenge solve on a cold browser context the DOM
-  // can still be empty/incomplete (e.g. 1.6 KB) even though the server sent the
-  // full 250 KB page. In that case the raw body is far more complete and reliable.
-  const bodyBytes = result.body ?? null
-  const bodyLen = bodyBytes ? bodyBytes.byteLength : 0
+// A cold browser context can finish a challenge with a tiny rendered DOM while
+// the original HTTP response carries the full page. Prefer those raw bytes.
+function renderedLooksIncomplete(result: ScrapeResult): boolean {
+  const bodyLen = result.body?.byteLength ?? 0
   const htmlLen = result.html.length
-  const renderedLooksIncomplete = bodyLen > 0 && htmlLen > 0 && htmlLen < bodyLen * 0.2 && htmlLen < 10_000
-  const useRenderedHtml = isHtml(contentType) && htmlLen > 0 && !renderedLooksIncomplete
-
-  let body: Buffer
-  let bodyIsCp1251 = false
-  if (useRenderedHtml) {
-    // If this domain is opted into cp1251, re-encode the rendered HTML (currently
-    // a UTF-8 JS string) to windows-1251 bytes so the client decodes it correctly.
-    const host = resultUrlHost(result.url)
-    if (cp1251Hosts && host && cp1251Hosts.has(host.toLowerCase())) {
-      body = Buffer.from(encodeCp1251(result.html))
-      bodyIsCp1251 = true
-    } else {
-      body = Buffer.from(result.html, "utf8")
-    }
-  } else if (bodyBytes) {
-    // Use the raw HTTP response body as-is. It is already in the server's native
-    // encoding (e.g. windows-1251 for rutracker.org), so NO re-encoding is needed —
-    // but we must report the correct charset so the client decodes it properly.
-    body = Buffer.from(bodyBytes)
-  } else {
-    body = Buffer.from(result.html, "utf8")
-  }
-
-  const headers: Record<string, string> = {}
-  for (const [name, value] of Object.entries(result.responseHeaders ?? {})) {
-    const lower = name.toLowerCase()
-    // When we replace the response body with a re-rendered DOM, the original
-    // transport-level headers (content-encoding, content-length, etag, …) no
-    // longer describe what we actually send, so strip them. In all other paths
-    // (raw HTTP body or utf-8 fallback) the original headers stay valid.
-    if (useRenderedHtml && TRANSFORMED_BODY_HEADERS.has(lower)) continue
-    headers[lower] = value
-  }
-  headers["content-type"] = bodyIsCp1251 ? contentType.replace(/charset=[^;\s]+/i, "charset=windows-1251") : contentType
-
-  return { body, contentType: headers["content-type"], headers }
+  return bodyLen > 0 && htmlLen > 0 && htmlLen < bodyLen * 0.2 && htmlLen < 10_000
 }
 
 function resultUrlHost(url: string): string | undefined {
@@ -86,4 +52,72 @@ function resultUrlHost(url: string): string | undefined {
   } catch {
     return undefined
   }
+}
+
+export function responseFromScrapeResult(
+  result: ScrapeResult,
+  cp1251Hosts?: ReadonlySet<string>,
+): ProxyBufferedResponse {
+  const upstreamContentType =
+    result.contentType ?? result.responseHeaders?.["content-type"] ?? "text/html; charset=utf-8"
+  const useRenderedHtml =
+    isHtml(upstreamContentType) &&
+    result.html.length > 0 &&
+    (result.tier >= 2 || result.body === undefined) &&
+    !isCharsetLessUtf8HtmlFragment(upstreamContentType, result.body, result.html) &&
+    !renderedLooksIncomplete(result)
+  let contentType = useRenderedHtml ? utf8ContentType(upstreamContentType) : upstreamContentType
+  // Playwright exposes browser response bodies after content decoding while
+  // retaining the upstream representation headers. Those headers cannot be
+  // forwarded with the decoded bytes. Tier 1, by contrast, carries wire bytes.
+  const bodyWasTransformed = useRenderedHtml || result.tier >= 2
+  let body: Buffer
+  if (useRenderedHtml) {
+    const host = resultUrlHost(result.url)
+    if (cp1251Hosts && host && cp1251Hosts.has(host.toLowerCase())) {
+      // Prowlarr's RuTracker parser decodes as windows-1251 regardless of upstream.
+      body = Buffer.from(encodeCp1251(result.html))
+      contentType = contentType.replace(/charset=[^;\s]+/i, "charset=windows-1251")
+    } else {
+      body = Buffer.from(result.html, "utf8")
+    }
+  } else {
+    body = result.body ? Buffer.from(result.body) : Buffer.from(result.html, "utf8")
+  }
+
+  const headers: Record<string, string> = {}
+  for (const [name, value] of Object.entries(result.responseHeaders ?? {})) {
+    const lower = name.toLowerCase()
+    if (bodyWasTransformed && TRANSFORMED_BODY_HEADERS.has(lower)) continue
+    headers[lower] = value
+  }
+  headers["content-type"] = contentType
+
+  return { body, contentType, headers }
+}
+
+export function responseFromBlockedEvidence(evidence: BlockedEvidence): ProxyBlockedResponse {
+  let statusCode =
+    Number.isInteger(evidence.statusCode) &&
+    evidence.statusCode !== undefined &&
+    evidence.statusCode >= 200 &&
+    evidence.statusCode < 600 &&
+    !BODYLESS_STATUS_CODES.has(evidence.statusCode)
+      ? evidence.statusCode
+      : 403
+
+  if (evidence.reason?.startsWith("anubis-") && statusCode < 400) {
+    statusCode = evidence.status === "timeout" ? 504 : 403
+  }
+
+  const headers: Record<string, string> = {
+    "content-type": "text/html; charset=utf-8",
+    "x-trawl-status": "blocked",
+  }
+  if (evidence.reason) {
+    headers["x-trawl-reason"] = evidence.reason
+  }
+
+  const body = Buffer.from(evidence.html, "utf8")
+  return { body, contentType: "text/html; charset=utf-8", headers, statusCode }
 }

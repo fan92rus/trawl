@@ -17,14 +17,14 @@ describe("ChallengeCache", () => {
     expect(c.get("c.example.com")).toBe("unknown")
   })
 
-  test("respects TTL — entries past TTL are not returned", () => {
+  test("respects TTL - entries past TTL are not returned", () => {
     const c = new ChallengeCache({ ttlMs: 10 })
     c.set("host.example", "direct")
     expect(c.get("host.example")).toBe("direct")
     // Sleep past TTL
     const deadline = Date.now() + 50
     while (Date.now() < deadline) {
-      // tight spin — 10ms ttl + 50ms margin
+      // tight spin - 10ms ttl + 50ms margin
     }
     expect(c.get("host.example")).toBeUndefined()
   })
@@ -88,6 +88,6 @@ describe("ChallengeCache", () => {
     while (Date.now() < endDeadline) {
       // tight spin
     }
-    expect(c.get("host")).toBe("direct") // refreshed — still valid
+    expect(c.get("host")).toBe("direct") // refreshed - still valid
   })
 })

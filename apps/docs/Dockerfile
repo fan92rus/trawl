@@ -1,20 +1,28 @@
-FROM oven/bun:1.4.0-alpine AS builder
-
-# git is required by VitePress lastUpdated (reads commit timestamps)
-RUN apk add --no-cache git
+FROM node:26.13.1-alpine AS builder
+COPY --from=oven/bun:1.4.5-alpine /usr/local/bin/bun /usr/local/bin/bun
 
 WORKDIR /app
 
-COPY package.json ./
-RUN bun install
+RUN apk add --no-cache git
 
-COPY . ./
+COPY package.json bun.lock ./
+COPY apps/api/package.json ./apps/api/
+COPY apps/web/package.json ./apps/web/
+COPY apps/docs/package.json ./apps/docs/
+COPY packages/client/package.json ./packages/client/
+COPY packages/types/package.json ./packages/types/
+COPY packages/browser/package.json ./packages/browser/
+COPY packages/tiers/package.json ./packages/tiers/
+RUN bun install --frozen-lockfile --filter '@trawl/docs' --linker=hoisted
+
+COPY apps/docs/ ./apps/docs/
+WORKDIR /app/apps/docs
 RUN bun run build
 
-FROM nginx:alpine AS runner
+FROM nginx:1.31.9-alpine AS runner
 
-COPY --from=builder /app/.vitepress/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=builder /app/apps/docs/.vitepress/dist /usr/share/nginx/html
+COPY apps/docs/nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
 

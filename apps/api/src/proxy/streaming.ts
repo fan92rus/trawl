@@ -2,18 +2,18 @@
 //
 // Goal: keep memory footprint low for big binaries (videos, archives, ISO images)
 // while still letting small JSON/HTML/text responses round-trip through the
-// challenge detector in a single Buffer — which is required because Tier 0
+// challenge detector in a single Buffer - which is required because Tier 0
 // (direct forward) only knows whether the response is CF-challenged after it
 // has the body to inspect.
 //
 // Decision precedence:
 //   1. Unknown Content-Length + binary-looking Content-Type → stream (safer).
-//   2. Content-Length >= STREAM_THRESHOLD → stream.
+//   2. Content-Length >= STREAM_THRESHOLD_BYTES → stream.
 //   3. Content-Type starts with video/ or audio/ → stream.
 //   4. URL extension matches a known binary container → stream.
 //   5. Otherwise → buffer.
 
-export const STREAM_THRESHOLD = 8 * 1024 * 1024 // 8 MiB
+export const STREAM_THRESHOLD_BYTES = 8 * 1024 * 1024 // 8 MiB
 
 // URL extensions that are almost always large binaries worth streaming.
 // Audio/video and HLS manifests are streamed even below the size threshold
@@ -55,7 +55,7 @@ export function shouldStream(url: string, contentLength?: number, contentType?: 
   }
 
   // 2. Size threshold.
-  if (typeof contentLength === "number" && contentLength >= STREAM_THRESHOLD) {
+  if (typeof contentLength === "number" && contentLength >= STREAM_THRESHOLD_BYTES) {
     return { stream: true, reason: "size-threshold" }
   }
 

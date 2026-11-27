@@ -1,35 +1,257 @@
-import { BrowserPool, SessionCache } from "@trawl/browser"
-import type { AcquireOptions, OrchestratorDeps } from "@trawl/tiers"
-import type { SessionData } from "@trawl/types"
+import { BrowserPool, MemorySessionCache, SessionCache, type SessionCacheStore } from "@trawl/browser"
+import {
+  type AcquireOptions,
+  BrowserSessions,
+  type OrchestratorDeps,
+  RequestValidationError,
+  WafDetector,
+} from "@trawl/tiers"
+import type { SessionCacheHealth, SessionData } from "@trawl/types"
 import {
   ACQUIRE_TIMEOUT_MS,
+  BROWSER_BLOCK_ADS,
+  BROWSER_COLD_BOOT,
+  BROWSER_GEOIP_DISABLE,
+  BROWSER_GEOIP_IP,
+  BROWSER_HARDWARE_CONCURRENCY,
+  BROWSER_IDLE_TIMEOUT_MS,
+  BROWSER_MAX_CONTENT_PROCESSES,
+  BROWSER_SESSION_MAX_ENTRIES,
+  BROWSER_SESSION_TTL_SECONDS,
   CLOSE_TIMEOUT_MS,
-  CONTENT_PROCESSES,
+  EXTERNAL_CAPTCHA,
   HEADFUL_POOL_SIZE,
   LAUNCH_TIMEOUT_MS,
+  MEMORY_SESSION_CACHE_MAX_ENTRIES,
   POOL_SIZE,
   proxyPool,
   RECYCLE_AFTER_TEMPORARY_CONTEXTS,
+  REDIS_CONNECT_TIMEOUT_MS,
+  REDIS_RETRY_DELAY_MS,
+  REDIS_SESSION_TTL_SECONDS,
   REDIS_URL,
   residentialProxyPool,
-  SESSION_TTL,
+  SCRAPE_MAX_TIMEOUT_MS,
+  SCRAPE_MIN_TIER,
+  SESSION_CACHE_DRIVER,
+  type SessionCacheDriver,
+  SHUTDOWN_DRAIN_MS,
   STALL_TIMEOUT_MS,
+  USER_PREFS,
+  WAF_DETECTION_ENABLED,
 } from "./config"
 import { log, Sentry } from "./logger"
+import { isLocalMitmProxy, localProxyCa } from "./proxy/localTrust"
+import { PublicEgressProxy } from "./public-egress"
+import { readRuntimeMemory } from "./runtimeMemory"
 
 const state: {
   pool?: BrowserPool
   headfulPool?: BrowserPool
-  sessionCache?: SessionCache
+  sessions?: BrowserSessions
 } = {}
 
 const handleOwners = new WeakMap<object, BrowserPool>()
+const wafDetector = new WafDetector()
+export const publicEgress = new PublicEgressProxy({
+  validateUpstream: async (upstream) => {
+    if (await isLocalMitmProxy(upstream))
+      throw new RequestValidationError(
+        "Public-only egress cannot use TRAWL's intercepting MITM proxy; use a forwarding proxy instead",
+        400,
+      )
+  },
+})
 
 type BrowserPoolOptions = ConstructorParameters<typeof BrowserPool>[0]
+
+interface SessionCacheRecoveryOptions {
+  createCache: () => SessionCacheStore
+  connectTimeoutMs: number
+  retryDelayMs: number
+  onConnected?: () => void
+  onUnavailable?: (error: unknown) => void
+}
+
+export class SessionCacheRecovery {
+  private cache?: SessionCacheStore
+  private retryTimer?: ReturnType<typeof setTimeout>
+  private stopped = true
+  private generation = 0
+  private connecting = false
+  private lastConnectedAt: string | null = null
+  private connectFailures = 0
+  private lookups = { hit: 0, miss: 0, error: 0 }
+  private writes = { ok: 0, error: 0 }
+
+  health(driver: SessionCacheHealth["driver"]): SessionCacheHealth {
+    return {
+      driver,
+      enabled: true,
+      connected: Boolean(this.cache),
+      state: this.cache ? "connected" : this.connecting ? "connecting" : "unavailable",
+      lastConnectedAt: this.lastConnectedAt,
+      connectFailures: this.connectFailures,
+      lookups: { ...this.lookups },
+      writes: { ...this.writes },
+    }
+  }
+
+  async load(domain: string): Promise<SessionData | undefined> {
+    if (!this.cache) return
+    try {
+      const data = await this.cache.load(domain)
+      this.lookups[data ? "hit" : "miss"]++
+      return data
+    } catch {
+      this.lookups.error++
+    }
+  }
+
+  async save(domain: string, data: SessionData): Promise<void> {
+    if (!this.cache) return
+    try {
+      await this.cache.save(domain, data)
+      this.writes.ok++
+    } catch {
+      this.writes.error++
+    }
+  }
+
+  constructor(private readonly options: SessionCacheRecoveryOptions) {}
+
+  current(): SessionCacheStore | undefined {
+    return this.cache
+  }
+
+  async start(): Promise<void> {
+    const stopping = this.stop()
+    const generation = this.generation
+    await stopping
+    if (generation !== this.generation) return
+    this.stopped = false
+    await this.connect()
+  }
+
+  async stop(): Promise<void> {
+    this.stopped = true
+    this.connecting = false
+    this.generation++
+    if (this.retryTimer) clearTimeout(this.retryTimer)
+    this.retryTimer = undefined
+    this.cache?.close()
+    this.cache = undefined
+  }
+
+  private async connect(): Promise<void> {
+    if (this.stopped) return
+    const generation = this.generation
+    const candidate = this.options.createCache()
+    this.connecting = true
+    try {
+      await candidate.connect(this.options.connectTimeoutMs)
+      if (generation !== this.generation) {
+        candidate.close()
+        return
+      }
+      this.cache = candidate
+      this.connecting = false
+      this.lastConnectedAt = new Date().toISOString()
+      candidate.onLost?.(() => {
+        if (this.cache !== candidate || generation !== this.generation) return
+        this.cache = undefined
+        candidate.close()
+        this.retry(new Error("Redis connection lost"))
+      })
+      this.options.onConnected?.()
+    } catch (error) {
+      candidate.close()
+      if (generation !== this.generation) return
+      this.connecting = false
+      this.connectFailures++
+      this.retry(error)
+    }
+  }
+
+  private retry(error: unknown): void {
+    this.options.onUnavailable?.(error)
+    if (this.stopped || this.options.retryDelayMs === 0) return
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = undefined
+      void this.connect()
+    }, this.options.retryDelayMs)
+    this.retryTimer.unref?.()
+  }
+}
+
+interface CreateSessionCacheRecoveryOptions {
+  driver: SessionCacheDriver
+  redisUrl?: string
+  ttlSeconds: number
+  memoryMaxEntries: number
+  redisConnectTimeoutMs: number
+  redisRetryDelayMs: number
+}
+
+export const createSessionCacheRecovery = ({
+  driver,
+  redisUrl,
+  ttlSeconds,
+  memoryMaxEntries,
+  redisConnectTimeoutMs,
+  redisRetryDelayMs,
+}: CreateSessionCacheRecoveryOptions): SessionCacheRecovery | undefined => {
+  if (driver === "memory") {
+    return new SessionCacheRecovery({
+      createCache: () => new MemorySessionCache({ ttlSeconds, maxEntries: memoryMaxEntries }),
+      connectTimeoutMs: 0,
+      retryDelayMs: 0,
+      onConnected: () => log.api.info("session cache: memory (Tier 2 fast-path enabled, per-instance)"),
+    })
+  }
+  if (!redisUrl) return
+
+  return new SessionCacheRecovery({
+    createCache: () => new SessionCache({ redisUrl, ttlSeconds }),
+    connectTimeoutMs: redisConnectTimeoutMs,
+    retryDelayMs: redisRetryDelayMs,
+    onConnected: () => log.api.info("session cache connected (Tier 2 fast-path enabled)"),
+    onUnavailable: (err) => {
+      const retry = redisRetryDelayMs > 0 ? `; retrying in ${redisRetryDelayMs}ms` : ""
+      log.api.error({ err, retry }, `session cache unavailable - Tier 2 disabled`)
+      Sentry.captureException(err)
+    },
+  })
+}
+
+const sessionCacheRecovery = createSessionCacheRecovery({
+  driver: SESSION_CACHE_DRIVER,
+  redisUrl: REDIS_URL,
+  ttlSeconds: REDIS_SESSION_TTL_SECONDS,
+  memoryMaxEntries: MEMORY_SESSION_CACHE_MAX_ENTRIES,
+  redisConnectTimeoutMs: REDIS_CONNECT_TIMEOUT_MS,
+  redisRetryDelayMs: REDIS_RETRY_DELAY_MS,
+})
+
+export function getSessionCacheHealth(): SessionCacheHealth {
+  return (
+    sessionCacheRecovery?.health(SESSION_CACHE_DRIVER) ?? {
+      driver: SESSION_CACHE_DRIVER,
+      enabled: false,
+      connected: false,
+      state: "disabled",
+      lastConnectedAt: null,
+      connectFailures: 0,
+      lookups: { hit: 0, miss: 0, error: 0 },
+      writes: { ok: 0, error: 0 },
+    }
+  )
+}
 
 interface InitPoolOptions {
   poolSize?: number
   headfulPoolSize?: number
+  coldBoot?: boolean
   createPool?: (options: BrowserPoolOptions) => BrowserPool
   initCache?: () => Promise<void>
 }
@@ -37,59 +259,82 @@ interface InitPoolOptions {
 export const getPool = () => state.pool
 export const getHeadfulPool = () => state.headfulPool
 
-const initSessionCache = async (): Promise<void> => {
-  try {
-    const sessionCache = new SessionCache({
-      redisUrl: REDIS_URL,
-      ttlSeconds: SESSION_TTL,
-    })
-    await sessionCache.connect()
-    state.sessionCache = sessionCache
-    log.api.info("session cache connected (Tier 2 fast-path enabled)")
-  } catch (err) {
-    state.sessionCache = undefined
-    log.api.error({ err }, "session cache unavailable — Tier 2 disabled")
-    Sentry.captureException(err)
-  }
-}
+const initSessionCache = (): Promise<void> => sessionCacheRecovery?.start() ?? Promise.resolve()
 
-export const shutdownPools = async (): Promise<void> => {
-  await Promise.all([state.pool?.shutdown(), state.headfulPool?.shutdown()])
+export const shutdownPools = async (drainTimeoutMs?: number): Promise<void> => {
+  await state.sessions?.shutdown()
+  await Promise.all([
+    wafDetector.close(),
+    sessionCacheRecovery?.stop(),
+    state.pool?.shutdown(drainTimeoutMs),
+    state.headfulPool?.shutdown(drainTimeoutMs),
+  ])
+  await publicEgress.close()
 }
 
 export const initPool = async ({
   poolSize = POOL_SIZE,
   headfulPoolSize = HEADFUL_POOL_SIZE,
+  coldBoot = BROWSER_COLD_BOOT,
   createPool = (options) => new BrowserPool(options),
   initCache = initSessionCache,
 }: InitPoolOptions = {}): Promise<void> => {
+  const poolState = coldBoot ? "cold" : "warm"
   const pool = createPool({
+    coldBoot,
     poolSize,
     acquireTimeoutMs: ACQUIRE_TIMEOUT_MS,
     recycleAfterTemporaryContexts: RECYCLE_AFTER_TEMPORARY_CONTEXTS,
-    contentProcesses: CONTENT_PROCESSES,
+    contentProcesses: BROWSER_MAX_CONTENT_PROCESSES,
+    idleTimeoutMs: BROWSER_IDLE_TIMEOUT_MS,
+    blockAds: BROWSER_BLOCK_ADS,
+    hardwareConcurrency: BROWSER_HARDWARE_CONCURRENCY,
+    geoipIp: BROWSER_GEOIP_IP,
+    disableGeoip: BROWSER_GEOIP_DISABLE,
     stallAfterMs: STALL_TIMEOUT_MS,
     closeTimeoutMs: CLOSE_TIMEOUT_MS,
+    drainTimeoutMs: SHUTDOWN_DRAIN_MS,
     launchTimeoutMs: LAUNCH_TIMEOUT_MS,
+    userPrefs: USER_PREFS,
+    memoryUsage: () => readRuntimeMemory(poolSize, headfulPoolSize),
   })
 
   state.headfulPool = undefined
   if (headfulPoolSize > 0) {
     state.headfulPool = createPool({
+      coldBoot,
       poolSize: headfulPoolSize,
       acquireTimeoutMs: ACQUIRE_TIMEOUT_MS,
       recycleAfterTemporaryContexts: RECYCLE_AFTER_TEMPORARY_CONTEXTS,
-      contentProcesses: CONTENT_PROCESSES,
+      contentProcesses: BROWSER_MAX_CONTENT_PROCESSES,
+      idleTimeoutMs: BROWSER_IDLE_TIMEOUT_MS,
+      blockAds: BROWSER_BLOCK_ADS,
+      hardwareConcurrency: BROWSER_HARDWARE_CONCURRENCY,
+      geoipIp: BROWSER_GEOIP_IP,
+      disableGeoip: BROWSER_GEOIP_DISABLE,
       virtualDisplay: true,
       label: "pool:headful",
       stallAfterMs: STALL_TIMEOUT_MS,
       closeTimeoutMs: CLOSE_TIMEOUT_MS,
+      drainTimeoutMs: SHUTDOWN_DRAIN_MS,
       launchTimeoutMs: LAUNCH_TIMEOUT_MS,
+      userPrefs: USER_PREFS,
+      memoryUsage: () => readRuntimeMemory(poolSize, headfulPoolSize),
     })
   }
   // Publish the pool before its first await. Tier 1 can serve immediately and
   // browser-backed requests can wait in acquire() while capacity warms.
   state.pool = pool
+  state.sessions = new BrowserSessions({
+    acquireBrowser: (domain, budgetMs, options) => getDeps().acquireBrowser(domain, budgetMs, options),
+    releaseBrowser: (handle) => getDeps().releaseBrowser(handle),
+    maxSessions: BROWSER_SESSION_MAX_ENTRIES,
+    defaultProxy: () => (SCRAPE_MIN_TIER === 4 ? residentialProxyPool : proxyPool)?.next(),
+    requireProxy: SCRAPE_MIN_TIER === 4,
+    trustedProxyCa: localProxyCa,
+    ttlMs: BROWSER_SESSION_TTL_SECONDS * 1_000,
+    networkProxy: (upstream) => publicEgress.proxyFor(upstream),
+  })
 
   try {
     await Promise.all([initCache(), pool.init()])
@@ -97,29 +342,31 @@ export const initPool = async ({
     if (state.headfulPool) {
       await state.headfulPool.init()
       state.headfulPool.startHealthCheck()
-      log.api.info({ headfulPoolSize }, "headful pool warm")
+      log.api.info({ headfulPoolSize, poolState }, "headful pool")
     }
   } catch (error) {
+    await state.sessions?.shutdown()
     await Promise.all([pool.shutdown(), state.headfulPool?.shutdown()])
     throw error
   }
 
-  log.api.info({ poolSize }, "ready — all browsers warm")
+  log.api.info({ poolSize, poolState }, "ready - all browsers warm")
 }
 
 export const getDeps = (): OrchestratorDeps => {
   if (!state.pool) throw new Error("pool not ready")
   const p = state.pool
   return {
+    sessions: state.sessions,
     acquireBrowser: async (d: string, budgetMs?: number, options?: AcquireOptions) => {
       if (options?.headful) {
         const headful = state.headfulPool
         if (!headful) throw new Error("DataDome requires BROWSER_HEADFUL_POOL_SIZE greater than 0")
-        const handle = await headful.acquire(d, budgetMs)
+        const handle = await headful.acquire(d, budgetMs, options?.signal, options?.browserId)
         handleOwners.set(handle, headful)
         return handle
       }
-      const handle = await p.acquire(d, budgetMs)
+      const handle = await p.acquire(d, budgetMs, options?.signal, options?.browserId)
       handleOwners.set(handle, p)
       return handle
     },
@@ -127,13 +374,20 @@ export const getDeps = (): OrchestratorDeps => {
       handleOwners.get(handle)?.release(handle.id, handle.lease)
       handleOwners.delete(handle)
     },
-    loadSession: (d: string) =>
-      state.sessionCache ? state.sessionCache.load(d).catch(() => undefined) : Promise.resolve(undefined),
-    saveSession: (d: string, data: SessionData) =>
-      state.sessionCache ? state.sessionCache.save(d, data).catch(() => {}) : Promise.resolve(),
+    loadSession: (d: string) => sessionCacheRecovery?.load(d) ?? Promise.resolve(undefined),
+    saveSession: (d: string, data: SessionData) => sessionCacheRecovery?.save(d, data) ?? Promise.resolve(),
     invalidateSession: (d: string) =>
-      state.sessionCache ? state.sessionCache.invalidate(d).catch(() => {}) : Promise.resolve(),
+      sessionCacheRecovery
+        ?.current()
+        ?.invalidate(d)
+        .catch(() => {}) ?? Promise.resolve(),
     proxyPool,
     residentialProxyPool,
+    trustedProxyCa: localProxyCa,
+    minTier: SCRAPE_MIN_TIER,
+    defaultMaxTimeout: SCRAPE_MAX_TIMEOUT_MS,
+    externalCaptcha: EXTERNAL_CAPTCHA,
+    detectWaf: (evidence, timeoutMs, signal) => wafDetector.detect(evidence, timeoutMs, signal),
+    wafDetectionEnabled: WAF_DETECTION_ENABLED,
   }
 }

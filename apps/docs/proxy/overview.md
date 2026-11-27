@@ -48,10 +48,15 @@ body, and end-to-end headers. It preserves headers such as:
 
 Hop-by-hop headers are rebuilt or removed at the proxy boundary.
 
-Responses not selected by the streaming policy—including small HTML, JSON, XML, text, and unknown
-small payloads—are buffered. Compressed `gzip`, `deflate`, and Brotli responses are decoded only
+Responses not selected by the streaming policy-including small HTML, JSON, XML, text, and unknown
+small payloads-are buffered. Compressed `gzip`, `deflate`, and Brotli responses are decoded only
 for challenge inspection; the original bytes remain the response body. Chunked buffered responses
 are de-chunked before being returned.
+
+If an upstream error occurs after a non-safe request may have been sent, the proxy returns
+`502` instead of automatically submitting the operation again. Requests that failed before
+transmission and safe methods retain scraper fallback. Disconnecting the client closes its
+owned direct or streaming upstream connection.
 
 ## Challenge escalation
 
@@ -63,14 +68,31 @@ orchestrator used by `POST /scrape`:
 3. fresh browser challenge solve;
 4. residential proxy solve, when configured.
 
-For browser-tier HTML responses, the proxy returns the rendered solved DOM rather than the original
-challenge response. Binary responses use the raw response bytes when the winning tier exposes them.
+Requests with client credentials do not read or populate shared clearance sessions.
+For browser solving, client cookies are imported into the request's temporary context
+with host-scoped defaults and `Secure` for HTTPS requests. Browser cookie rules apply,
+including cookie sharing between ports on the same host. The browser keeps its own
+consistent user agent.
+`Authorization` is forwarded by the HTTP tiers only. If such a request requires a
+browser, the proxy returns `502` rather than forwarding that header through browser
+redirects. Use cookies for authenticated browser requests.
+
+For browser-tier complete HTML documents, the proxy returns the rendered solved DOM rather than the
+original challenge response. Charset-less UTF-8 HTML fragments with non-ASCII content use the captured
+response bytes instead of a serialized browser DOM. Fragments with a doctype, scripts, or event handlers
+require matching rendered content and styles. Passive injected scripts are ignored for this comparison;
+changed content, solved challenges, embedded documents, and complete HTML documents retain the rendered DOM.
+Binary responses use the raw response bytes when the winning tier exposes them.
 
 A hostname that produced a supported challenge wall is cached for five minutes. During that window,
 later requests for the hostname skip Tier 0 and go directly to the tiered solver.
 
 Challenge and CAPTCHA solving is best effort. A site can still reject the browser, require user
 interaction, bind clearance to an unsupported signal, or change its challenge implementation.
+When the final browser tier stops on such a wall, the proxy returns its bounded rendered HTML with
+the upstream status code and `X-Trawl-Status: blocked` instead of disguising it as a gateway outage.
+`X-Trawl-Reason` identifies the detected wall when available. Network, browser-pool, and other
+infrastructure failures still return `502 Bad Gateway`.
 
 ## Buffering and streaming
 
@@ -78,6 +100,7 @@ The proxy buffers ordinary responses by default so challenge detection sees the 
 It streams when at least one of these applies:
 
 - `Content-Length` is at least 8 MiB;
+- an unknown-length response reaches the same 8 MiB buffer threshold;
 - the content type is `video/*` or `audio/*`;
 - an unknown-length response has a known binary content type;
 - the URL has a known media, archive, installer, disk-image, PDF, or font extension.

@@ -56,5 +56,5 @@ Bazarr uses subtitle providers, not torrent indexers, so it does not use FlareSo
 | Repeat request with an accepted session      | Tier 2 cached browser session              |
 | Direct/datacenter path rejected              | Tier 4, when a residential proxy is set    |
 
-The session cache TTL is configurable via `SESSION_TTL_SECONDS` (default 1 hour). Actual latency
+The session cache TTL is configurable via `REDIS_SESSION_TTL_SECONDS` (default 1 hour). Actual latency
 depends on the indexer, challenge variant, IP reputation, and whether its saved session remains valid.

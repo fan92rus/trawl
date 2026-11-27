@@ -1,0 +1,24 @@
+[
+  {
+    "id": "cloudflare-demo",
+    "name": "nopecha.com/demo/cloudflare",
+    "url": "https://nopecha.com/demo/cloudflare",
+    "protection": "Cloudflare",
+    "expected": "NopeCHA.*(Cloudflare|Demo)|Cloudflare.*NopeCHA",
+    "expectedPaths": ["/demo/cloudflare", "/demo"]
+  },
+  {
+    "id": "1337x",
+    "name": "1337x.to",
+    "url": "https://1337x.to/",
+    "protection": "Cloudflare",
+    "expected": "1337x.*(Search|Torrents)|Search.*Torrents"
+  },
+  {
+    "id": "eztv",
+    "name": "eztvx.to/home",
+    "url": "https://eztvx.to/home",
+    "protection": "Cloudflare",
+    "expected": "<title>[^<]*EZTV"
+  }
+]

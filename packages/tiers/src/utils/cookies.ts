@@ -1,4 +1,53 @@
-import type { Cookie } from "@trawl/types"
+import type { Cookie, InputCookie } from "@trawl/types"
+import { RequestValidationError } from "./sanitize"
+
+export function cookieMatchesUrl(cookie: Cookie, url: URL): boolean {
+  const domain = cookie.domain.toLowerCase()
+  const host = domain.startsWith(".") ? domain.slice(1) : domain
+  return (
+    (url.hostname === host || (domain.startsWith(".") && url.hostname.endsWith(`.${host}`))) &&
+    (!cookie.secure || url.protocol === "https:") &&
+    (cookie.expires === -1 || cookie.expires > Date.now() / 1000) &&
+    (url.pathname === cookie.path ||
+      (url.pathname.startsWith(cookie.path) && (cookie.path.endsWith("/") || url.pathname[cookie.path.length] === "/")))
+  )
+}
+
+export function normalizeInputCookies(cookies: InputCookie[], url: string) {
+  if (!Array.isArray(cookies) || cookies.length > 200)
+    throw new RequestValidationError("cookies must be an array of at most 200 cookies", 400)
+  let chars = 0
+  return cookies.map((cookie) => {
+    if (!cookie || typeof cookie.name !== "string" || !cookie.name || typeof cookie.value !== "string")
+      throw new RequestValidationError("Each cookie requires a name and string value", 400)
+    chars += cookie.name.length + cookie.value.length
+    if (chars > 1_000_000) throw new RequestValidationError("Cookie input exceeds the size limit", 400)
+    for (const field of ["domain", "path"] as const) {
+      if (cookie[field] !== undefined && (typeof cookie[field] !== "string" || !cookie[field]))
+        throw new RequestValidationError(`Cookie ${field} must be a non-empty string`, 400)
+    }
+    if (cookie.path !== undefined && !cookie.path.startsWith("/"))
+      throw new RequestValidationError("Cookie path must start with /", 400)
+    const expires = cookie.expires ?? cookie.expiry
+    if (expires !== undefined && (!Number.isFinite(expires) || (expires < 0 && expires !== -1)))
+      throw new RequestValidationError("Cookie expiry must be Unix seconds or -1", 400)
+    for (const field of ["httpOnly", "secure"] as const)
+      if (cookie[field] !== undefined && typeof cookie[field] !== "boolean")
+        throw new RequestValidationError(`Cookie ${field} must be a boolean`, 400)
+    if (cookie.sameSite !== undefined && !["Strict", "Lax", "None"].includes(cookie.sameSite))
+      throw new RequestValidationError("Invalid cookie sameSite", 400)
+    return {
+      name: cookie.name,
+      value: cookie.value,
+      domain: cookie.domain ?? new URL(url).hostname,
+      path: cookie.path ?? "/",
+      ...(expires === undefined ? {} : { expires }),
+      httpOnly: cookie.httpOnly,
+      secure: cookie.secure,
+      sameSite: cookie.sameSite,
+    }
+  })
+}
 
 interface RawCookie {
   name: string
@@ -18,7 +67,7 @@ export function normalizeSameSite(s: string | undefined): "Strict" | "Lax" | "No
   return s === "Strict" || s === "Lax" || s === "None" ? s : "Lax"
 }
 
-// Maps Playwright's raw context.cookies() shape to TRAWL's Cookie type — shared by
+// Maps Playwright's raw context.cookies() shape to TRAWL's Cookie type - shared by
 // tiers 2-4, which each read cookies back off the browser context after a successful load.
 export function toCookies(rawCookies: RawCookie[]): Cookie[] {
   return rawCookies.map((c) => ({

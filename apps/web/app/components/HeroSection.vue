@@ -1,3 +1,7 @@
+<script lang="ts" setup>
+import { cloudflareRepeatBenchmark, formatDuration } from "../utils/benchmarks"
+</script>
+
 <template>
   <section class="hero">
     <div class="hero-bg" aria-hidden="true" />
@@ -9,7 +13,7 @@
         class="hero-badge"
       >
         <span class="badge-dot" />
-        open source · self-hosted · zero external APIs
+        open source · self-hosted scraping
       </div>
 
       <h1
@@ -18,8 +22,8 @@
         :enter="{ opacity: 1, y: 0, transition: { duration: 500, delay: 100 } }"
         class="hero-heading"
       >
-        <span class="line-1">bypass anything.</span>
-        <span class="line-2 accent">return in 500ms.</span>
+        <span class="line-1">bypass challenges.</span>
+        <span class="line-2 accent">take the fast path.</span>
       </h1>
 
       <p
@@ -28,10 +32,10 @@
         :enter="{ opacity: 1, y: 0, transition: { duration: 500, delay: 200 } }"
         class="hero-copy"
       >
-        An adaptive, self-hosted scraping engine — tries the cheapest path first and only escalates when needed. Solves
-        Cloudflare challenges natively in 4–15 seconds. Caches browser sessions per domain and returns sub-500ms on
-        every repeat request.
-        <em>No tokens. No quotas. No cloud. Just Docker.</em>
+        A fast, self-hosted scraping engine that starts with HTTP and only opens a browser when the page needs it. Solve
+        supported challenges, reuse accepted sessions and get the content without repeating the expensive work. Use the
+        API, connect an AI agent through MCP, or plug it into Prowlarr.
+        <em>Less waiting. Less browser work. More useful pages.</em>
       </p>
 
       <div
@@ -53,32 +57,35 @@
         class="hero-stats"
       >
         <div class="hero-stat">
-          <span class="hero-stat-num accent">&lt; 500ms</span>
-          <span class="hero-stat-label">cached domain response</span>
+          <span class="hero-stat-num accent">{{ formatDuration(cloudflareRepeatBenchmark.repeatMs) }}</span>
+          <span class="hero-stat-label">best repeat on a Cloudflare-protected site</span>
         </div>
         <div class="hero-stat-divider" />
         <div class="hero-stat">
-          <span class="hero-stat-num accent">4–15s</span>
-          <span class="hero-stat-label">fresh CF challenge solve</span>
+          <span class="hero-stat-num accent">HTTP</span>
+          <span class="hero-stat-label">automatic clearance reuse</span>
         </div>
         <div class="hero-stat-divider" />
         <div class="hero-stat">
-          <span class="hero-stat-num accent">4</span>
-          <span class="hero-stat-label">execution tiers</span>
+          <span class="hero-stat-num accent">MCP</span>
+          <span class="hero-stat-label">Markdown, JSON, screenshots</span>
         </div>
       </div>
+      <a href="#compare" class="hero-measurement-note"
+        >Fastest verified repeat across the highlighted sites. View benchmarks ↗</a
+      >
     </div>
 
     <div class="ticker-wrap" aria-hidden="true">
       <div class="ticker-track ticker-fwd">
         <span v-for="i in 4" :key="i">
-          adaptive tier engine · cloudflare bypass · session cache · camoufox firefox · turnstile solver · recaptcha
-          audio · geetest slide · hcaptcha · proxy escalation · self-healing pool ·
+          adaptive tier engine · cloudflare bypass · MCP tools · camoufox firefox · turnstile solver · recaptcha audio ·
+          geetest slide · Anubis PoW · CAP widgets · proxy escalation ·
         </span>
       </div>
       <div class="ticker-track ticker-rev">
         <span v-for="i in 4" :key="i">
-          persistent pool · domain stickiness · zero cold starts · flaresolver compat · prowlarr · jackett · sonarr ·
+          browser sessions · live dashboard · resource recovery · flaresolver compat · prowlarr · jackett · sonarr ·
           radarr · redis cache · open source ·
         </span>
       </div>
@@ -133,7 +140,7 @@
 }
 
 .hero-heading {
-  font-size: clamp(40px, 7vw, 82px);
+  font-size: clamp(32px, 5.8vw, 68px);
   font-weight: 700;
   line-height: 1.04;
   letter-spacing: -0.03em;
@@ -276,5 +283,12 @@
   50% {
     opacity: 0.3;
   }
+}
+.hero-measurement-note {
+  font-size: 10px;
+  line-height: 1.7;
+  color: var(--text-muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 </style>

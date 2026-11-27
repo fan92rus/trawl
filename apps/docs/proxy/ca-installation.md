@@ -8,11 +8,30 @@ description: Trust TRAWL's generated root CA on operating systems, browsers, Jav
 TRAWL decrypts proxied HTTPS connections to detect challenge pages. On first proxy startup it
 creates:
 
-- `ca.crt` — the root certificate clients install;
-- `ca.key` — the private signing key, which must remain secret.
+- `ca.crt` - the root certificate clients install;
+- `ca.key` - the private signing key, which must remain secret.
 
-Both files live in `MITM_PROXY_CA_DIR`. Per-host certificates are generated in memory and signed by
+Both files live in `MITM_CA_DIR`. Per-host certificates are generated in memory and signed by
 this root. Persist the directory so clients only need to install the root once.
+
+## Upgrading an existing CA
+
+On the first startup after upgrading to a version containing the fix for issue #113, TRAWL checks
+the persisted root certificate. If it lacks a Subject Key Identifier, TRAWL updates `ca.crt` once
+and logs the certificate path. The subject, serial number, validity period, and CA key stay the
+same; `ca.key` is not changed. TRAWL refuses to migrate if the certificate and private key do not
+match or an existing Subject Key Identifier is invalid, rather than silently creating a new CA
+identity. Initialization is serialized with a short-lived `.ca.lock` file so multiple instances
+sharing the same CA volume cannot race to create different identities. If a process is forcibly
+terminated during initialization, remove a stale lock only after confirming no other instance is
+starting.
+
+Adding the extension changes the certificate fingerprint. Clients that pin the exact certificate,
+including strict TLS clients, must download the updated `ca.crt`, remove the previously installed
+TRAWL root, and import the updated certificate using the relevant instructions below. Restart the
+client afterward if it caches its trust store. Clients that identify trust anchors by their public
+key and subject may continue to work without re-importing, but updating every trust store is the
+safest deployment procedure.
 
 ::: danger
 Anyone with `ca.key` can issue certificates trusted by clients that installed this CA. Keep the
@@ -126,8 +145,10 @@ The exact startup-hook directory depends on the image. LinuxServer images suppor
 
 ## Rotation and recovery
 
-Do not delete or replace `ca.crt` or `ca.key` during normal upgrades. If either is lost, TRAWL
-generates a new root on the next startup and every client must install the new certificate.
+Do not delete or replace `ca.crt` or `ca.key` during normal upgrades. TRAWL only generates a new
+root when both files are absent. If just one file is missing, startup fails to prevent an accidental
+identity change. If both are lost, TRAWL generates a new root on the next startup and every client
+must install the new certificate.
 
 To intentionally rotate the CA:
 

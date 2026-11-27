@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { scrape } from "../src/orchestrator"
 import { runTier1 } from "../src/tiers/1"
+import { tier1Transport } from "../src/utils/tier1Transport"
 
 interface RecordedCall {
   url: string
@@ -16,15 +18,15 @@ const installFetchMock = (
     })
   },
 ) => {
-  const originalFetch = globalThis.fetch
-  ;(globalThis as { fetch: typeof fetch }).fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const originalFetch = tier1Transport.fetch
+  tier1Transport.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
     const call: RecordedCall = { url, init }
     recorded.push(call)
     return responder(call)
   }) as typeof fetch
   return () => {
-    ;(globalThis as { fetch: typeof fetch }).fetch = originalFetch
+    tier1Transport.fetch = originalFetch
   }
 }
 
@@ -36,18 +38,34 @@ afterEach(() => {
   // Per-test teardown is handled by the returned `restore` closure in each test.
 })
 
-describe("runTier1 — POST support", () => {
-  test("passes an explicit HTTP proxy to Bun fetch", async () => {
+describe("runTier1 - POST support", () => {
+  test("reports the same fingerprint UA that the orchestrator sends", async () => {
     const restore = installFetchMock()
     try {
-      const result = await runTier1(
-        "https://target.example/x",
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        "http://proxy:8080",
+      const result = await scrape(
+        { url: "https://example.com/x", maxTier: 1 },
+        {
+          acquireBrowser: async () => {
+            throw new Error("Tier 1 success must not acquire a browser")
+          },
+          releaseBrowser: () => {},
+          loadSession: async () => undefined,
+          saveSession: async () => {},
+          invalidateSession: async () => {},
+        },
       )
+
+      const headers = recorded[0].init?.headers as Record<string, string>
+      expect(result.userAgent).toBe(headers["User-Agent"] ?? headers["user-agent"])
+    } finally {
+      restore()
+    }
+  })
+
+  test("passes an explicit HTTP proxy to the TLS transport", async () => {
+    const restore = installFetchMock()
+    try {
+      const result = await runTier1("https://target.example/x", undefined, undefined, undefined, "http://proxy:8080")
       expect(result.status).toBe("success")
       expect((recorded[0].init as RequestInit & { proxy?: string }).proxy).toBe("http://proxy:8080")
     } finally {
@@ -60,14 +78,7 @@ describe("runTier1 — POST support", () => {
       () => new Response("proxy auth", { status: 407, headers: { "content-type": "text/plain" } }),
     )
     try {
-      const result = await runTier1(
-        "https://target.example/x",
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        "http://proxy:8080",
-      )
+      const result = await runTier1("https://target.example/x", undefined, undefined, undefined, "http://proxy:8080")
       expect(result.status).toBe("error")
       expect(result.reason).toBe("proxy-authentication-failed")
     } finally {
@@ -82,14 +93,7 @@ describe("runTier1 — POST support", () => {
         }),
     )
     try {
-      const result = await runTier1(
-        "https://target.example/x",
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        "http://proxy:8080",
-      )
+      const result = await runTier1("https://target.example/x", undefined, undefined, undefined, "http://proxy:8080")
       expect(result.status).toBe("error")
       expect(result.reason).toBe("proxy-connection-failed")
     } finally {
@@ -102,14 +106,7 @@ describe("runTier1 — POST support", () => {
       throw new Error("TLS connection aborted")
     })
     try {
-      const result = await runTier1(
-        "https://target.example/x",
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        "https://proxy:1001",
-      )
+      const result = await runTier1("https://target.example/x", undefined, undefined, undefined, "https://proxy:1001")
       expect(result.status).toBe("error")
       expect(result.reason).toBe("proxy-connection-failed")
     } finally {
@@ -141,7 +138,7 @@ describe("runTier1 — POST support", () => {
       expect(recorded[0].url).toBe("https://example.com/login")
       expect(recorded[0].init?.method).toBe("POST")
       expect(recorded[0].init?.body).toBe("user=a&pw=b")
-      // Caller-supplied Content-Type must be passed through untouched — no
+      // Caller-supplied Content-Type must be passed through untouched - no
       // auto-injection at the tier level.
       const h = recorded[0].init?.headers as Record<string, string>
       expect(h?.["Content-Type"] ?? h?.["content-type"]).toBe("application/x-www-form-urlencoded")
@@ -156,14 +153,14 @@ describe("runTier1 — POST support", () => {
       await runTier1("https://example.com/x", undefined, "GET", "ignored=by-design")
       expect(recorded).toHaveLength(1)
       expect(recorded[0].init?.method).toBe("GET")
-      // Spec: `method === "POST" ? body : undefined` — GET + body is ignored.
+      // Spec: `method === "POST" ? body : undefined` - GET + body is ignored.
       expect(recorded[0].init?.body).toBeUndefined()
     } finally {
       restore()
     }
   })
 
-  test("caller headers are spread LAST and therefore can override Fingerprint defaults — the reserved-name denylist at the orchestrator level is what prevents UA spoofing in production", async () => {
+  test("caller headers are spread LAST and therefore can override Fingerprint defaults - the reserved-name denylist at the orchestrator level is what prevents UA spoofing in production", async () => {
     const restore = installFetchMock()
     try {
       // This demonstrates the tier's pass-through behaviour: a non-reserved
@@ -175,7 +172,7 @@ describe("runTier1 — POST support", () => {
 
       await runTier1("https://example.com/x", cleaned)
       const h = recorded[0].init?.headers as Record<string, string>
-      // After sanitisation, only Accept survived — so tier1's FINGERPRINT UA wins.
+      // After sanitisation, only Accept survived - so tier1's FINGERPRINT UA wins.
       expect(h?.["User-Agent"] ?? h?.["user-agent"]).not.toBe("evil-spider/1.0")
       expect(h?.["User-Agent"] ?? h?.["user-agent"]).toBeTruthy()
     } finally {

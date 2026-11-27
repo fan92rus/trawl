@@ -102,5 +102,5 @@ Avoid setting these globally inside the TRAWL container itself; that can create 
 | WebSocket handshake is rejected                          | The direct handshake lacked required cookies or authorization                            |
 | Proxy works in curl but not the application              | The application uses a separate trust store or ignores system proxy settings             |
 
-Enable `MITM_PROXY_DEBUG=true`, reproduce one request, and inspect the TRAWL logs to see whether it
+Enable `MITM_DEBUG=true`, reproduce one request, and inspect the TRAWL logs to see whether it
 used Tier 0, streaming, or the scrape fallback.

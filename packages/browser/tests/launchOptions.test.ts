@@ -1,8 +1,8 @@
 import { describe, expect, mock, test } from "bun:test"
 
 // camoufox-js resolves `geoip` by calling several public "what is my IP" endpoints before
-// Playwright starts. On this host those endpoints are unreachable, so `geoip: true` throws
-// InvalidIP during pool.init() and the container enters a restart loop. Capture the real
+// Playwright starts. On this host those endpoints are unreachable, so deploying with
+// BROWSER_GEOIP_DISABLE=true (pool option `disableGeoip`) is required. Capture the real
 // launch options instead of launching a browser so the regression is testable offline.
 const launches: Array<Record<string, unknown>> = []
 mock.module("camoufox-js", () => ({
@@ -25,7 +25,7 @@ const { BrowserPool } = await import("../src/pool")
 
 describe("Camoufox launch options", () => {
   test("does not depend on a public-IP lookup at startup", async () => {
-    const pool = new BrowserPool({ poolSize: 1 })
+    const pool = new BrowserPool({ poolSize: 1, disableGeoip: true })
     await pool.init()
 
     expect(launches).toHaveLength(1)

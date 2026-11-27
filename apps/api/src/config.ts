@@ -1,78 +1,192 @@
-import { ProxyPool } from "@trawl/tiers"
+import { isIP } from "node:net"
+import { type ExternalCaptchaOptions, ProxyPool, type ProxySelection, parseCaptchaProfiles } from "@trawl/tiers"
+import type { Cookie, InputCookie } from "@trawl/types"
 import { log } from "./logger"
 
-export const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379"
-export const PORT = Number(process.env.PORT ?? "8191")
-export const POOL_SIZE = Number(process.env.BROWSER_POOL_SIZE ?? "5")
+export const REDIS_URL = process.env.REDIS_URL?.trim() || undefined
+export type SessionCacheDriver = "redis" | "memory"
+const configuredSessionCacheDriver = process.env.SESSION_CACHE_DRIVER?.trim().toLowerCase() || "redis"
+if (configuredSessionCacheDriver !== "redis" && configuredSessionCacheDriver !== "memory") {
+  throw new Error(
+    `Invalid SESSION_CACHE_DRIVER ${JSON.stringify(process.env.SESSION_CACHE_DRIVER)}; expected "redis" or "memory"`,
+  )
+}
+export const SESSION_CACHE_DRIVER: SessionCacheDriver = configuredSessionCacheDriver
+const integerInRange = (value: string | undefined, fallback: number, min: number, max = Number.MAX_SAFE_INTEGER) => {
+  if (value === undefined || value.trim() === "") return fallback
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed >= min && parsed <= max ? parsed : fallback
+}
+const positiveInteger = (value: string | undefined, fallback: number): number => integerInRange(value, fallback, 1)
+const nonNegativeInteger = (value: string | undefined, fallback: number): number => integerInRange(value, fallback, 0)
+const isTier = (tier: number): tier is 1 | 2 | 3 | 4 => tier === 1 || tier === 2 || tier === 3 || tier === 4
+
+export const parseScrapeMinTier = (value: string | undefined): 1 | 2 | 3 | 4 => {
+  if (value === undefined || value.trim() === "") return 1
+  const parsed = Number(value)
+  if (isTier(parsed)) return parsed
+  throw new Error(`Invalid SCRAPE_MIN_TIER ${JSON.stringify(value)}; expected 1, 2, 3, or 4`)
+}
+
+export const parseProxySelection = (value: string | undefined): ProxySelection => {
+  const normalized = value?.trim().toLowerCase() || "failover"
+  if (normalized === "failover" || normalized === "roundrobin" || normalized === "random") return normalized
+  throw new Error(
+    `Invalid SCRAPE_PROXY_SELECTION ${JSON.stringify(value)}; expected "failover", "roundrobin", or "random"`,
+  )
+}
+
+export const parseBrowserHardwareConcurrency = (value: string | undefined): number | undefined => {
+  if (value === undefined || value.trim() === "") return undefined
+  const parsed = Number(value)
+  if (Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= 64) return parsed
+  throw new Error("BROWSER_HARDWARE_CONCURRENCY must be an integer from 1 to 64")
+}
+
+export const PORT = integerInRange(process.env.PORT, 8_191, 1, 65_535)
+export const WAF_DETECTION_ENABLED = !/^(0|false|no)$/i.test(process.env.WAF_DETECTION_ENABLED?.trim() ?? "")
+export const POOL_SIZE = positiveInteger(process.env.BROWSER_POOL_SIZE, 1)
+export const BROWSER_GEOIP_IP = process.env.BROWSER_GEOIP_IP?.trim() || undefined
+// Fork deployment: this host has no route to the public "what is my IP" endpoints
+// camoufox-js consults for `geoip`. Keep upstream's explicit-IP option as the
+// primary mechanism; this opt-out skips the lookup while retaining fingerprint
+// timezone/locale from the selected profile.
+export const BROWSER_GEOIP_DISABLE = /^(1|true|yes)$/i.test(process.env.BROWSER_GEOIP_DISABLE?.trim() ?? "")
+if (BROWSER_GEOIP_IP && !isIP(BROWSER_GEOIP_IP)) {
+  throw new Error("BROWSER_GEOIP_IP must be a valid IPv4 or IPv6 address")
+}
 // How long acquire() will poll for a free browser before rejecting with PoolExhaustedError.
-// 120s lets a burst of ~15 parallel scrapes queue behind a busy pool (pool=5, slowest
-// solve ~12-20s) without returning 429; ReLampa's own 429/503 retry loop covers the rest.
-// Tune lower for fast-fail feedback in dev; tune higher for very heavy upstream targets.
-export const ACQUIRE_TIMEOUT_MS = Number(process.env.BROWSER_ACQUIRE_TIMEOUT_MS ?? "120000")
-export const SESSION_TTL = Number(process.env.SESSION_TTL_SECONDS ?? "3600")
+// Tune lower for fast-fail feedback; tune higher to let a small pool absorb longer browser queues.
+export const ACQUIRE_TIMEOUT_MS = positiveInteger(process.env.BROWSER_ACQUIRE_TIMEOUT_MS, 30_000)
+export const REDIS_SESSION_TTL_SECONDS = positiveInteger(process.env.REDIS_SESSION_TTL_SECONDS, 3_600)
+export const BROWSER_SESSION_MAX_ENTRIES = positiveInteger(process.env.BROWSER_SESSION_MAX_ENTRIES, 4)
+export const BROWSER_SESSION_TTL_SECONDS = positiveInteger(process.env.BROWSER_SESSION_TTL_SECONDS, 3_600)
+export const MEMORY_SESSION_CACHE_MAX_ENTRIES = positiveInteger(process.env.MEMORY_SESSION_CACHE_MAX_ENTRIES, 1_000)
+// A failed initial Redis connection must not disable Tier 2 for the process lifetime.
+// Each attempt is bounded; failed attempts are retried in the background while the API stays ready.
+export const REDIS_CONNECT_TIMEOUT_MS = positiveInteger(process.env.REDIS_CONNECT_TIMEOUT_MS, 5_000)
+export const REDIS_RETRY_DELAY_MS = nonNegativeInteger(process.env.REDIS_RETRY_DELAY_MS, 5_000)
 // Rolling-replace a browser after this many Tier 3/4 temporary contexts. Every
 // creation counts regardless of outcome; 0 disables periodic replacement.
-export const RECYCLE_AFTER_TEMPORARY_CONTEXTS = Number(process.env.BROWSER_RECYCLE_AFTER_CONTEXTS ?? "8")
+export const RECYCLE_AFTER_TEMPORARY_CONTEXTS = nonNegativeInteger(process.env.BROWSER_RECYCLE_AFTER_CONTEXTS, 8)
+// Keep the bundled ad blocker unless the operator opts out of its overhead.
+export const BROWSER_BLOCK_ADS = !/^(0|false|no)$/i.test(process.env.BROWSER_BLOCK_ADS?.trim() ?? "")
 // Caps Firefox content processes per browser. Default `2` keeps thread/RAM footprint
 // minimal while still allowing CF/Imperva challenges to resolve. Raise if specific
 // targets fail with empty content (rare).
-export const CONTENT_PROCESSES = Number(process.env.BROWSER_CONTENT_PROCESSES ?? "2")
+export const BROWSER_IDLE_TIMEOUT_MS = nonNegativeInteger(process.env.BROWSER_IDLE_TIMEOUT_MS, 0)
+// Skip startup browser launches; the first browser-backed request warms the pool.
+export const BROWSER_COLD_BOOT = /^(1|true|yes)$/i.test(process.env.BROWSER_COLD_BOOT?.trim() ?? "")
+export const BROWSER_MAX_CONTENT_PROCESSES = positiveInteger(process.env.BROWSER_MAX_CONTENT_PROCESSES, 2)
+// Optional native CPU count for worker-based challenges; unset keeps Camoufox defaults.
+export const BROWSER_HARDWARE_CONCURRENCY = parseBrowserHardwareConcurrency(process.env.BROWSER_HARDWARE_CONCURRENCY)
 // Size of the headful sub-pool, launched behind Xvfb for DataDome Device Check escalations.
 //
 // Off by default because this pool sits ON TOP of BROWSER_POOL_SIZE: one headful browser
 // plus its X display measures ~380 MB, which would silently move the memory ceiling of a
 // deployment that never meets DataDome. Set it to 1 to scrape DataDome targets.
-export const HEADFUL_POOL_SIZE = Number(process.env.BROWSER_HEADFUL_POOL_SIZE ?? "0")
+export const HEADFUL_POOL_SIZE = nonNegativeInteger(process.env.BROWSER_HEADFUL_POOL_SIZE, 0)
+// Deployment-wide lower bound for every scraper entry point. Invalid values fail
+// closed so a typo cannot unexpectedly re-enable a direct Tier 1 request.
+export const SCRAPE_MIN_TIER = parseScrapeMinTier(process.env.SCRAPE_MIN_TIER)
+export const SCRAPE_MAX_TIMEOUT_MS = Number(process.env.SCRAPE_MAX_TIMEOUT_MS?.trim() || 60_000)
+if (!Number.isInteger(SCRAPE_MAX_TIMEOUT_MS) || SCRAPE_MAX_TIMEOUT_MS < 1 || SCRAPE_MAX_TIMEOUT_MS > 2_147_483_647) {
+  throw new Error("SCRAPE_MAX_TIMEOUT_MS must be an integer from 1 to 2147483647")
+}
+export const SCRAPE_PROXY_SELECTION = parseProxySelection(process.env.SCRAPE_PROXY_SELECTION)
+export const FLARESOLVERR_COOKIE_FALLBACK = /^(1|true|yes)$/i.test(
+  process.env.FLARESOLVERR_COOKIE_FALLBACK?.trim() ?? "",
+)
 
-// How long a browser may stay checked out before the pool calls it wedged rather than
-// busy. A scrape's own budget is req.maxTimeout (default 60s), so 3x that is well clear
-// of anything legitimate while still catching a hung checkout within a few minutes.
-export const STALL_TIMEOUT_MS = Number(process.env.BROWSER_STALL_TIMEOUT_MS ?? "180000")
+// Optional extra Firefox prefs. Invalid values fail startup.
+const parseUserPrefs = (value: string | undefined): Record<string, string | number | boolean> => {
+  if (!value?.trim()) return {}
+  let prefs: unknown
+  try {
+    prefs = JSON.parse(value)
+  } catch {
+    throw new Error("USER_PREFS must contain valid JSON")
+  }
+  if (prefs === null || typeof prefs !== "object" || Array.isArray(prefs)) {
+    throw new Error("USER_PREFS must be a JSON object of pref name to value")
+  }
+  for (const pref of Object.values(prefs)) {
+    if (typeof pref === "string" || typeof pref === "boolean") continue
+    if (typeof pref === "number" && Number.isInteger(pref) && pref >= -2147483648 && pref <= 2147483647) continue
+    throw new Error("USER_PREFS values must be strings, booleans or signed 32-bit integers")
+  }
+  return prefs as Record<string, string | number | boolean>
+}
+
+export const USER_PREFS = parseUserPrefs(process.env.USER_PREFS)
+
+// Optional MCP Streamable HTTP endpoint. Keep this disabled unless the API is
+// reachable only by trusted clients; v1 intentionally has no authentication.
+export const MCP_ENABLED = /^(1|true|yes)$/i.test(process.env.MCP_ENABLED ?? "")
+export const MCP_ALLOWED_ORIGINS = (process.env.MCP_ALLOWED_ORIGINS ?? "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean)
+
+// Setting a token enables the local metrics dashboard. The API may be exposed
+// beyond loopback, so target hostnames are never served without authentication.
+export const METRICS_DASHBOARD_TOKEN = process.env.METRICS_DASHBOARD_TOKEN?.trim() || undefined
+if (METRICS_DASHBOARD_TOKEN && METRICS_DASHBOARD_TOKEN.length < 32) {
+  throw new Error("METRICS_DASHBOARD_TOKEN must be at least 32 characters")
+}
+// Explicitly allow an unauthenticated dashboard only when the operator keeps
+// the published port on a trusted loopback interface.
+export const METRICS_DASHBOARD_ENABLED = /^(1|true|yes)$/i.test(process.env.METRICS_DASHBOARD_ENABLED ?? "")
+
+// Grace period after a scrape's deadline before reclaiming a hung browser checkout.
+export const STALL_TIMEOUT_MS = positiveInteger(process.env.BROWSER_STALL_TIMEOUT_MS, 180_000)
 // Upper bound on a single browser/context close during a recycle. Camoufox can hang on
 // close when a content process is wedged; past this we abandon the close and relaunch.
-export const CLOSE_TIMEOUT_MS = Number(process.env.BROWSER_CLOSE_TIMEOUT_MS ?? "10000")
+export const CLOSE_TIMEOUT_MS = positiveInteger(process.env.BROWSER_CLOSE_TIMEOUT_MS, 10_000)
+// How long shutdown lets accepted API requests finish before closing the pools.
+export const SHUTDOWN_DRAIN_MS = integerInRange(process.env.BROWSER_SHUTDOWN_DRAIN_MS, 0, 0, 2_147_483_647 - 30_000)
 // Upper bound on a browser launch. A cold Camoufox start is a few seconds, but launches
-// have been observed to hang indefinitely — without a bound that strands the pool entry.
-export const LAUNCH_TIMEOUT_MS = Number(process.env.BROWSER_LAUNCH_TIMEOUT_MS ?? "90000")
+// have been observed to hang indefinitely - without a bound that strands the pool entry.
+export const LAUNCH_TIMEOUT_MS = positiveInteger(process.env.BROWSER_LAUNCH_TIMEOUT_MS, 90_000)
 
 // PROXY_URL / RESIDENTIAL_PROXY_URL accept a comma-separated list of proxy URLs (a single
-// URL still works — it's just a 1-element list). *_LIST_FILE is an alternative source
+// URL still works - it's just a 1-element list). *_LIST_FILE is an alternative source
 // (one proxy per line) for lists too large for a single env var.
-export const proxyPool = ProxyPool.fromEnv(process.env.PROXY_URL, process.env.PROXY_LIST_FILE)
+export const proxyPool = ProxyPool.fromEnv(process.env.PROXY_URL, process.env.PROXY_LIST_FILE, SCRAPE_PROXY_SELECTION)
 export const residentialProxyPool = ProxyPool.fromEnv(
   process.env.RESIDENTIAL_PROXY_URL,
   process.env.RESIDENTIAL_PROXY_LIST_FILE,
+  SCRAPE_PROXY_SELECTION,
 )
 
-// ── MITM forward-proxy mode ────────────────────────────────────────────────────
-// Optional browser-backed HTTP(S) forward proxy (apps/api/src/proxy). Off by default.
-// When enabled, point a client's HTTP(S) proxy at MITM_PROXY_PORT and every request is
-// re-issued through the browser pool — for clients that only consume cookies+UA from
-// /v1 and re-fetch themselves, which fails on fingerprint-bound Cloudflare clearances.
-// See proxy/server.ts for the full rationale.
-export const MITM_PROXY_ENABLED = /^(1|true|yes)$/i.test(process.env.MITM_PROXY_ENABLED ?? "")
-export const MITM_PROXY_PORT = Number(process.env.MITM_PROXY_PORT ?? "8192")
-// Default 0.0.0.0 — the dominant deployment is docker-compose (clients reach trawl
+// MITM forward-proxy mode
+// Direct HTTP(S) forwarding with browser escalation for supported challenges.
+// Fingerprint-bound clearances must be reused through this proxy, not a separate client.
+export const MITM_ENABLED = /^(1|true|yes)$/i.test(process.env.MITM_ENABLED ?? "")
+export const MITM_PORT = integerInRange(process.env.MITM_PORT, 8_192, 1, 65_535)
+// Default 0.0.0.0 - the dominant deployment is docker-compose (clients reach trawl
 // through the docker bridge, which requires a non-loopback bind). Loopback-only
-// operators can set MITM_PROXY_HOST=127.0.0.1. The primary safety guard remains
-// MITM_PROXY_ENABLED=false.
-export const MITM_PROXY_HOST = process.env.MITM_PROXY_HOST ?? "0.0.0.0"
+// operators can set MITM_HOST=127.0.0.1. The primary safety guard remains
+// MITM_ENABLED=false.
+export const MITM_HOST = process.env.MITM_HOST ?? "0.0.0.0"
 // CA cert + key live here (persist across restarts so the CA is installed once).
-export const MITM_PROXY_CA_DIR = process.env.MITM_PROXY_CA_DIR ?? "/data/proxy-ca"
+export const MITM_CA_DIR = process.env.MITM_CA_DIR ?? "/data/proxy-ca"
 // Cap the tier the proxy will escalate to (e.g. keep it off residential Tier 4).
-const configuredMaxTier = Number(process.env.MITM_PROXY_MAX_TIER)
-const isTier = (tier: number): tier is 1 | 2 | 3 | 4 => tier === 1 || tier === 2 || tier === 3 || tier === 4
-export const MITM_PROXY_MAX_TIER = isTier(configuredMaxTier) ? configuredMaxTier : undefined
+const configuredMaxTier = Number(process.env.MITM_MAX_TIER)
+export const MITM_MAX_TIER = isTier(configuredMaxTier) ? configuredMaxTier : undefined
+// Skip the proxy's direct Tier 0 probe and route ordinary HTTP requests into scrape().
+// This is separate from ScrapeRequest.skipHttp, which controls scraper Tier 1.
+export const MITM_ALWAYS_SCRAPE = /^(1|true|yes)$/i.test(process.env.MITM_ALWAYS_SCRAPE ?? "")
+// Opt in to scraping fallback for otherwise unrecognized HTTP 429 responses.
+export const MITM_ESCALATE_429 = /^(1|true|yes)$/i.test(process.env.MITM_ESCALATE_429 ?? "")
 // Log one line per proxied request (method, url, status, content-type, bytes). Off by
-// default — proxied clients can be chatty. Errors are always logged.
-export const MITM_PROXY_DEBUG = /^(1|true|yes)$/i.test(process.env.MITM_PROXY_DEBUG ?? "")
+// default - proxied clients can be chatty. Errors are always logged.
+export const MITM_DEBUG = /^(1|true|yes)$/i.test(process.env.MITM_DEBUG ?? "")
 
 // ── Auth cookies injection (per-domain) ─────────────────────────────────────────
 // Optional JSON file mapping a hostname to an array of {name, value, domain?, path?}
-// cookies that are injected into the browser context before every request to that
-// domain. Needed for sites requiring login (e.g. rutracker.org bb_session) where
-// the caller (Prowlarr) has no cookies of its own to forward. Mirrors the
-// flaresolver-proxy user_cookies.json design.
+// cookies injected into every browser context before navigation. Needed for sites
+// requiring login (e.g. rutracker.org bb_session) where Prowlarr has no cookies.
 export interface UserCookie {
   name: string
   value: string
@@ -120,8 +234,7 @@ export function userCookiesForHost(host: string): UserCookie[] | undefined {
 }
 
 // Domains whose HTML responses are re-encoded from UTF-8 to windows-1251 before being
-// returned. Prowlarr's RuTracker indexer decodes responses as windows-1251, so serving
-// UTF-8 bytes would produce mojibake. Comma-separated hostnames, e.g. CP1251_HOSTS=rutracker.org
+// returned. Prowlarr's RuTracker parser decodes responses as windows-1251.
 const CP1251_HOSTS_ENV = process.env.CP1251_HOSTS ?? ""
 export const CP1251_HOSTS: ReadonlySet<string> = new Set(
   CP1251_HOSTS_ENV.split(",")
@@ -129,4 +242,76 @@ export const CP1251_HOSTS: ReadonlySet<string> = new Set(
     .filter(Boolean),
 )
 
+// Merge configured per-domain auth cookies into a request. Caller-provided
+// cookies win when a name is present, so an explicit override stays effective.
+export function withUserCookies(
+  host: string | undefined,
+  cookies?: ReadonlyArray<InputCookie | Cookie>,
+): InputCookie[] | undefined {
+  const normalized: InputCookie[] = (cookies ?? []).map((c) => ({
+    name: c.name,
+    value: c.value,
+    ...(c.domain !== undefined ? { domain: c.domain } : {}),
+    ...(c.path !== undefined ? { path: c.path } : {}),
+    ...(c.expires !== undefined ? { expires: c.expires } : {}),
+    ...(c.httpOnly !== undefined ? { httpOnly: c.httpOnly } : {}),
+    ...(c.secure !== undefined ? { secure: c.secure } : {}),
+    ...(c.sameSite === "Strict" || c.sameSite === "Lax" || c.sameSite === "None" ? { sameSite: c.sameSite } : {}),
+  }))
+  if (!host) return cookies ? normalized : undefined
+  const configured = userCookiesForHost(host)
+  if (!configured?.length) return cookies ? normalized : undefined
+  const names = new Set(normalized.map((c) => c.name))
+  for (const c of configured) {
+    if (names.has(c.name)) continue
+    normalized.push({
+      name: c.name,
+      value: c.value,
+      domain: c.domain ?? `.${host}`,
+      path: c.path ?? "/",
+      expires: -1,
+      httpOnly: false,
+      secure: false,
+    })
+    names.add(c.name)
+  }
+  return normalized
+}
+
 export const startTime = Date.now()
+
+// Paid solving is deployment-level opt-in; a key alone never enables it.
+export function parseExternalCaptchaConfig(
+  env: Record<string, string | undefined>,
+): ExternalCaptchaOptions | undefined {
+  const provider = env.CAPTCHA_SOLVER?.trim().toLowerCase() || "none"
+  if (provider === "none") return undefined
+  if (provider !== "2captcha") throw new Error("CAPTCHA_SOLVER must be none or 2captcha")
+  const apiKey = env.TWOCAPTCHA_API_KEY?.trim()
+  if (!apiKey) throw new Error("TWOCAPTCHA_API_KEY is required when CAPTCHA_SOLVER=2captcha")
+  const number = (name: string, fallback: number, min: number, max: number) => {
+    const value = env[name]?.trim()
+    const parsed = value ? Number(value) : fallback
+    if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
+      throw new Error(`${name} must be an integer from ${min} to ${max}`)
+    }
+    return parsed
+  }
+  let profiles: ExternalCaptchaOptions["profiles"]
+  if (env.CAPTCHA_SOLVER_PROFILES?.trim()) {
+    try {
+      if (env.CAPTCHA_SOLVER_PROFILES.length > 256000) throw new Error("Too large")
+      profiles = parseCaptchaProfiles(JSON.parse(env.CAPTCHA_SOLVER_PROFILES))
+    } catch {
+      throw new Error("Invalid CAPTCHA_SOLVER_PROFILES configuration")
+    }
+  }
+  return {
+    apiKey,
+    maxTasks: number("CAPTCHA_SOLVER_MAX_TASKS", 1, 1, 3),
+    timeoutMs: number("CAPTCHA_SOLVER_TIMEOUT_MS", 120000, 1000, 180000),
+    localTimeoutMs: number("CAPTCHA_SOLVER_LOCAL_TIMEOUT_MS", 10000, 1000, 30000),
+    ...(profiles ? { profiles } : {}),
+  }
+}
+export const EXTERNAL_CAPTCHA = parseExternalCaptchaConfig(process.env)

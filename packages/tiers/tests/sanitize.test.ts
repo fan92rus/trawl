@@ -86,7 +86,7 @@ describe("isValidMethod", () => {
   })
 
   test("rejects non-standard verbs and unknown strings", () => {
-    expect(isValidMethod("CONNECT")).toBe(false) // tunneling verb — intentionally excluded
+    expect(isValidMethod("CONNECT")).toBe(false) // tunneling verb - intentionally excluded
     expect(isValidMethod("FOOBAR")).toBe(false)
     expect(isValidMethod("get")).toBe(false) // case-sensitive
     expect(isValidMethod("post")).toBe(false)

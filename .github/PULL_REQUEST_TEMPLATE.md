@@ -4,7 +4,7 @@
 
 ## Linked issues
 
-<!-- Closes #123, fixes #456, or "n/a — discussed in #789". -->
+<!-- Closes #123, fixes #456, or "n/a - discussed in #789". -->
 
 ## Type of change
 

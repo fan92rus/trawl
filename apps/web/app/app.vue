@@ -1,10 +1,9 @@
 <script lang="ts" setup>
-const description =
-  "Adaptive, self-hosted web scraping engine for Cloudflare, Akamai, Imperva, and CAPTCHA-protected sites, with a challenge-aware HTTP/HTTPS proxy."
+import { siteDescription as description, siteTitle } from "./utils/site"
 
 useSchemaOrg([
   defineWebPage({
-    name: "TRAWL — Self-Hosted Web Scraping & Challenge Bypass",
+    name: `TRAWL - ${siteTitle}`,
     description,
   }),
   defineSoftwareApp({
@@ -36,10 +35,12 @@ useSchemaOrg([
       <EcosystemBanner />
       <StatsBar />
       <FeaturesGrid />
-      <ChallengeGrid />
       <TierFlow />
-      <ProxySection />
       <CompareTable />
+      <ChallengeGrid />
+      <ProxySection />
+      <AgentSection />
+      <DashboardSection />
       <CtaSection />
       <CodeExample />
     </main>
@@ -140,7 +141,7 @@ p {
 
 /* ── Layout ── */
 .layout {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
 }
@@ -198,6 +199,20 @@ main {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--text-muted);
+  margin-bottom: 32px;
+}
+
+.section-title {
+  font-size: clamp(22px, 3vw, 34px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 12px;
+}
+.section-lead {
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--text-muted);
+  max-width: 700px;
   margin-bottom: 32px;
 }
 

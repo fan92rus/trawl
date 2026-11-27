@@ -2,62 +2,87 @@
 const features = [
   {
     icon: "⬡",
-    title: "Adaptive Tier Engine",
-    badge: "unique",
+    title: "Adaptive tier engine",
+    badge: "HTTP first",
     featured: true,
-    desc: "Every request takes the cheapest path first — plain HTTP, then cached session, then live browser solve, then residential proxy. You pay the full browser cost only when you have to.",
+    desc: "Start with HTTP and reuse accepted Cloudflare or Anubis clearance without opening a page. Escalate to browser solving and an optional residential proxy when needed.",
   },
   {
     icon: "⇄",
-    title: "General HTTP/HTTPS Proxy",
-    badge: "v1.2+",
+    title: "MCP for AI agents",
+    badge: "6 tools",
     featured: true,
-    desc: "Proxy ordinary HTTP, HTTPS, WebSockets, binary files, and Range requests through port 8192. Direct traffic stays lightweight; detected challenge pages escalate through TRAWL's solver tiers.",
+    desc: "Read Markdown or text, scrape HTML, extract JSON records, capture screenshots and inspect browser activity. Connect any Streamable HTTP MCP client to known public URLs.",
+  },
+  {
+    icon: "◎",
+    title: "Isolated browser sessions",
+    badge: "v1.8.0",
+    featured: true,
+    desc: "Keep cookies, localStorage and sessionStorage across native, MCP and FlareSolverr-compatible requests. Sessions have capacity and idle limits and can be invalidated under memory pressure.",
+  },
+  {
+    icon: "▣",
+    title: "Local metrics dashboard",
+    badge: "live",
+    featured: false,
+    desc: "Persistent request history, winning tiers, failure causes and timings at /dashboard. Live updates and JSON export, with stored URLs limited to domains.",
+  },
+  {
+    icon: "⟁",
+    title: "Browser challenge flows",
+    badge: "native",
+    featured: false,
+    desc: "Provider-specific handling for Cloudflare, Akamai, Imperva, DDoS-Guard, AWS WAF, DataDome and Anubis. Persistent walls are reported as failures.",
+  },
+  {
+    icon: "⬢",
+    title: "Built-in CAPTCHA solvers",
+    badge: "local first",
+    featured: false,
+    desc: "Turnstile, reCAPTCHA v2 audio, hCaptcha auto-pass/audio, GeeTest Slide, ALTCHA, Friendly Captcha and CAP. Support depends on the widget variant.",
+  },
+  {
+    icon: "↝",
+    title: "Optional external solver",
+    badge: "2Captcha",
+    featured: false,
+    desc: "Paid fallback for supported declarative reCAPTCHA v2/Enterprise and standalone Turnstile. Other catalogue tasks use hostname-specific profiles; disabled by default.",
+  },
+  {
+    icon: "⇄",
+    title: "Challenge-aware proxy",
+    badge: "HTTP / HTTPS",
+    featured: false,
+    desc: "Forward ordinary traffic directly. Detected walls use the same scraping tiers. WebSockets, binary streaming and Range requests retain direct proxy semantics.",
   },
   {
     icon: "◈",
     title: "Camoufox Firefox",
-    badge: "stealthy",
-    featured: true,
-    desc: "Powered by Camoufox — a hardened Firefox build that patches fingerprints at the C++ level. Cloudflare's bot score sees a real user. No CDP leaks. No Chrome fingerprint flags.",
-  },
-  {
-    icon: "⟁",
-    title: "Cloudflare + WAF Bypass",
-    badge: "fastest",
-    desc: "Fresh browser contexts handle Cloudflare managed mode, Akamai behavioral interstitials, and Imperva sensor flows. Solved cookies are extracted and cached immediately.",
-  },
-  {
-    icon: "⬢",
-    title: "Captcha Suite",
-    badge: "auto",
-    desc: "Turnstile via shadow DOM click, reCAPTCHA v2 via free audio STT, hCaptcha auto-pass, and GeeTest v4 slide via canvas gap detection. No external solver APIs. No cost per solve.",
-  },
-  {
-    icon: "⊕",
-    title: "Custom Headers",
-    badge: "exclusive",
-    desc: "Pass Authorization, Referer, Origin, or any custom header through the native API. The general proxy additionally preserves browser and authenticated traffic headers while filtering unsafe hop-by-hop values.",
-  },
-  {
-    icon: "◎",
-    title: "Session Cache",
-    desc: "Solved cookies and browser identity are stored in Redis per domain. Accepted sessions avoid unnecessary re-challenges and keep repeat requests fast. TTL is configurable.",
-  },
-  {
-    icon: "▣",
-    title: "Persistent Pool",
-    desc: "N browser instances stay warm and ready at all times. A request picks up a browser in ~50ms instead of waiting 3–5 seconds for a cold launch. Domain-sticky routing maximises session reuse.",
-  },
-  {
-    icon: "↝",
-    title: "Proxy Escalation",
-    desc: "Datacenter IP for Tier 3 solves, residential proxy for Tier 4. Escalates automatically when an IP is reputation-flagged. Residential bandwidth is only consumed when truly needed.",
+    badge: "browser",
+    featured: false,
+    desc: "Firefox with fingerprint patches at the C++/Juggler level. Browser identity and solved domain sessions can be reused when the target accepts them.",
   },
   {
     icon: "⟳",
-    title: "FlareSolverr Compatible",
-    desc: "Implements the FlareSolverr v2 API exactly — including response shape, cookie format, and version string. Prowlarr, Jackett, Sonarr, and Radarr connect with a single URL change.",
+    title: "Resource-aware lifecycle",
+    badge: "configurable",
+    featured: false,
+    desc: "Shared deadlines, cancellation cleanup, crash recovery and memory-aware recycling. Start with one warm browser; optional idle retirement and ad-blocking controls tune the workload.",
+  },
+  {
+    icon: "⊕",
+    title: "Extraction and captures",
+    badge: "native + MCP",
+    featured: false,
+    desc: "Wait for visible content, extract CSS-selected records and capture a viewport, full page or element. Native requests can also collect bounded network and console diagnostics.",
+  },
+  {
+    icon: "◇",
+    title: "FlareSolverr compatibility",
+    badge: "/v1",
+    featured: false,
+    desc: "Connect Prowlarr or Jackett through the familiar request and session API. Point your integration at TRAWL and keep your existing indexer configuration.",
   },
 ]
 </script>
@@ -68,7 +93,8 @@ const features = [
       <p class="eyebrow">capabilities</p>
       <h2 class="section-title">one engine for the protected web.</h2>
       <p class="section-sub">
-        Adaptive scraping tiers, browser-backed challenge handling, embedded CAPTCHA flows, and a general-purpose proxy.
+        APIs for applications, MCP for agents, browser sessions for repeat work and a dashboard for everything TRAWL
+        handles.
       </p>
 
       <div class="features-grid">

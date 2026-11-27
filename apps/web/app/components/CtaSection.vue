@@ -10,6 +10,16 @@ const tabs: { id: Tab; label: string; hint: string }[] = [
   { id: "cached", label: "compose · cached", hint: "+ redis session cache" },
   { id: "production", label: "compose · prod", hint: "full setup" },
 ]
+const setups: Record<Tab, string> = {
+  docker:
+    "docker run -d --name trawl \\\n  -p 127.0.0.1:8191:8191 \\\n  --shm-size=1gb \\\n  -e SESSION_CACHE_DRIVER=memory \\\n  -e METRICS_DASHBOARD_ENABLED=true \\\n  -e MCP_ENABLED=true \\\n  -e BROWSER_POOL_SIZE=1 \\\n  -v trawl_metrics:/data/metrics \\\n  ghcr.io/germondai/trawl:1.12.0",
+  minimal:
+    'services:\n  trawl:\n    image: ghcr.io/germondai/trawl:1.12.0\n    ports: ["127.0.0.1:8191:8191"]\n    shm_size: 1gb\n    environment:\n      SESSION_CACHE_DRIVER: memory\n      BROWSER_POOL_SIZE: 1\n      METRICS_DASHBOARD_ENABLED: "true"\n      MCP_ENABLED: "true"\n    volumes: [trawl_metrics:/data/metrics]\n    restart: unless-stopped\nvolumes:\n  trawl_metrics:',
+  cached:
+    'services:\n  redis:\n    image: redis:8.10.3-alpine\n    command: ["redis-server", "--appendonly", "yes"]\n    volumes: [redis_data:/data]\n    healthcheck:\n      test: ["CMD", "redis-cli", "ping"]\n  trawl:\n    image: ghcr.io/germondai/trawl:1.12.0\n    ports: ["127.0.0.1:8191:8191"]\n    shm_size: 1gb\n    environment:\n      REDIS_URL: redis://redis:6379\n      BROWSER_POOL_SIZE: 1\n      METRICS_DASHBOARD_ENABLED: "true"\n      MCP_ENABLED: "true"\n    volumes: [trawl_metrics:/data/metrics]\n    depends_on:\n      redis:\n        condition: service_healthy\nvolumes:\n  redis_data:\n  trawl_metrics:',
+  production:
+    'services:\n  redis:\n    image: redis:8.10.3-alpine\n    command: ["redis-server", "--appendonly", "yes"]\n    restart: unless-stopped\n    volumes: [redis_data:/data]\n    healthcheck:\n      test: ["CMD", "redis-cli", "ping"]\n  trawl:\n    image: ghcr.io/germondai/trawl:1.12.0\n    restart: unless-stopped\n    ports: ["127.0.0.1:8191:8191"]\n    shm_size: 1gb\n    environment:\n      REDIS_URL: redis://redis:6379\n      BROWSER_POOL_SIZE: 1\n      METRICS_DASHBOARD_ENABLED: "true"\n      MCP_ENABLED: "true"\n    volumes: [trawl_metrics:/data/metrics]\n    depends_on:\n      redis:\n        condition: service_healthy\n    healthcheck:\n      test: ["CMD", "curl", "-sf", "http://localhost:8191/health"]\n      interval: 30s\nvolumes:\n  redis_data:\n  trawl_metrics:',
+}
 </script>
 
 <template>
@@ -22,8 +32,11 @@ const tabs: { id: Tab; label: string; hint: string }[] = [
         class="cta-inner"
       >
         <div class="cta-label">open source · AGPL-3.0 · self-hosted</div>
-        <h2 class="cta-heading">scrape protected sites<br />in 60 seconds.</h2>
-        <p class="cta-sub">No clone. No build. Pull the Docker image and send your first request.</p>
+        <h2 class="cta-heading">start with one browser.</h2>
+        <p class="cta-sub">
+          Run v1.12.0 with MCP enabled and persistent dashboard history. Pull the image, wait for /health, then send
+          your first request.
+        </p>
         <div class="cta-actions">
           <a href="https://github.com/germondai/trawl" target="_blank" rel="noopener noreferrer" class="btn-primary">
             <span class="btn-icon">↗</span>
@@ -33,7 +46,7 @@ const tabs: { id: Tab; label: string; hint: string }[] = [
         </div>
 
         <!-- Step 1: Setup -->
-        <div class="step-label">1 — choose your setup</div>
+        <div class="step-label">1 - choose your setup</div>
         <div class="cta-snippet">
           <fieldset class="setup-tabs">
             <legend class="sr-only">Installation method</legend>
@@ -50,119 +63,28 @@ const tabs: { id: Tab; label: string; hint: string }[] = [
             </button>
           </fieldset>
 
-          <div v-if="active === 'docker'" class="snippet-body-wrap">
+          <div class="snippet-body-wrap">
             <div class="snippet-bar inner-bar">
-              <span class="snippet-hint">no compose needed · fastest to start</span>
+              <span class="snippet-hint">{{ tabs.find((tab) => tab.id === active)?.hint }}</span>
             </div>
-            <pre class="snippet-body"><code>docker run -d \
-  --name trawl \
-  -p <span class="s">8191:8191</span> \
-  --shm-size=<span class="s">1gb</span> \
-  ghcr.io/germondai/<span class="s">trawl:latest</span></code></pre>
-          </div>
-
-          <div v-else-if="active === 'minimal'" class="snippet-body-wrap">
-            <div class="snippet-bar inner-bar">
-              <span class="snippet-hint">docker-compose.minimal.yml · single service · no redis</span>
-            </div>
-            <pre class="snippet-body"><code><span class="k">services:</span>
-  trawl:
-    <span class="k">image:</span> <span class="s">ghcr.io/germondai/trawl:latest</span>
-    <span class="k">ports:</span>
-      - <span class="s">"${PORT:-8191}:8191"</span>
-      - <span class="s">"${MITM_PROXY_PORT:-8192}:${MITM_PROXY_PORT:-8192}"</span>
-    <span class="k">shm_size:</span> <span class="s">1gb</span>
-    <span class="k">environment:</span>
-      <span class="k">BROWSER_POOL_SIZE:</span> <span class="s">1</span>
-      <span class="k">MITM_PROXY_ENABLED:</span> <span class="s">${MITM_PROXY_ENABLED:-false}</span>
-      <span class="k">MITM_PROXY_CA_DIR:</span> <span class="s">/data/proxy-ca</span>
-    <span class="k">volumes:</span>
-      - <span class="s">trawl_proxy_ca:/data/proxy-ca</span>
-    <span class="k">healthcheck:</span>
-      <span class="k">test:</span> [<span class="s">"CMD"</span>, <span class="s">"curl"</span>, <span class="s">"-sf"</span>, <span class="s">"http://localhost:8191/health"</span>]
-<span class="k">volumes:</span>
-  trawl_proxy_ca:</code></pre>
-          </div>
-
-          <div v-else-if="active === 'cached'" class="snippet-body-wrap">
-            <div class="snippet-bar inner-bar">
-              <span class="snippet-hint">docker-compose.yml · redis cache · pool size 1</span>
-            </div>
-            <pre class="snippet-body"><code><span class="k">services:</span>
-  redis:
-    <span class="k">image:</span> <span class="s">redis:8.8.1-alpine</span>
-    <span class="k">volumes:</span> [<span class="s">redis_data:/data</span>]
-    <span class="k">healthcheck:</span>
-      <span class="k">test:</span> [<span class="s">"CMD"</span>, <span class="s">"redis-cli"</span>, <span class="s">"ping"</span>]
-  trawl:
-    <span class="k">image:</span> <span class="s">ghcr.io/germondai/trawl:latest</span>
-    <span class="k">ports:</span>
-      - <span class="s">"${PORT:-8191}:8191"</span>
-      - <span class="s">"${MITM_PROXY_PORT:-8192}:${MITM_PROXY_PORT:-8192}"</span>
-    <span class="k">shm_size:</span> <span class="s">1gb</span>
-    <span class="k">environment:</span>
-      <span class="k">REDIS_URL:</span> <span class="s">redis://redis:6379</span>
-      <span class="k">BROWSER_POOL_SIZE:</span> <span class="s">${BROWSER_POOL_SIZE:-1}</span>
-      <span class="k">MITM_PROXY_ENABLED:</span> <span class="s">${MITM_PROXY_ENABLED:-false}</span>
-      <span class="k">MITM_PROXY_CA_DIR:</span> <span class="s">/data/proxy-ca</span>
-    <span class="k">volumes:</span>
-      - <span class="s">trawl_proxy_ca:/data/proxy-ca</span>
-    <span class="k">depends_on:</span>
-      redis:
-        <span class="k">condition:</span> <span class="s">service_healthy</span>
-<span class="k">volumes:</span>
-  redis_data:
-  trawl_proxy_ca:</code></pre>
-          </div>
-
-          <div v-else-if="active === 'production'" class="snippet-body-wrap">
-            <div class="snippet-bar inner-bar">
-              <span class="snippet-hint">docker-compose.prod.yml · pool size 3 · restart + healthcheck</span>
-            </div>
-            <pre class="snippet-body"><code><span class="k">services:</span>
-  redis:
-    <span class="k">image:</span> <span class="s">redis:8.8.1-alpine</span>
-    <span class="k">restart:</span> <span class="s">always</span>
-    <span class="k">volumes:</span> [<span class="s">redis_data:/data</span>]
-    <span class="k">healthcheck:</span>
-      <span class="k">test:</span> [<span class="s">"CMD"</span>, <span class="s">"redis-cli"</span>, <span class="s">"ping"</span>]
-  trawl:
-    <span class="k">image:</span> <span class="s">ghcr.io/germondai/trawl:latest</span>
-    <span class="k">restart:</span> <span class="s">always</span>
-    <span class="k">ports:</span>
-      - <span class="s">"${PORT:-8191}:8191"</span>
-      - <span class="s">"${MITM_PROXY_PORT:-8192}:${MITM_PROXY_PORT:-8192}"</span>
-    <span class="k">shm_size:</span> <span class="s">1gb</span>
-    <span class="k">mem_limit:</span> <span class="s">3g</span>
-    <span class="k">environment:</span>
-      <span class="k">REDIS_URL:</span> <span class="s">redis://redis:6379</span>
-      <span class="k">BROWSER_POOL_SIZE:</span> <span class="s">3</span>
-      <span class="k">MITM_PROXY_ENABLED:</span> <span class="s">${MITM_PROXY_ENABLED:-false}</span>
-      <span class="k">MITM_PROXY_CA_DIR:</span> <span class="s">/data/proxy-ca</span>
-    <span class="k">volumes:</span>
-      - <span class="s">trawl_proxy_ca:/data/proxy-ca</span>
-    <span class="k">depends_on:</span>
-      redis:
-        <span class="k">condition:</span> <span class="s">service_healthy</span>
-    <span class="k">healthcheck:</span>
-      <span class="k">test:</span> [<span class="s">"CMD"</span>, <span class="s">"curl"</span>, <span class="s">"-sf"</span>, <span class="s">"http://localhost:8191/health"</span>]
-      <span class="k">interval:</span> <span class="s">30s</span>
-<span class="k">volumes:</span>
-  redis_data:
-  trawl_proxy_ca:</code></pre>
+            <pre class="snippet-body"><code>{{ setups[active] }}</code></pre>
           </div>
         </div>
 
         <p class="tag-hint">
-          Older hardware or a Synology NAS without AVX2 / kernel &lt; 5.1? Swap <code>:latest</code> for
-          <code>:baseline</code>
-          in the image tag above — degrades gracefully down to kernel 3.10 —
+          For older CPUs or NAS deployments, use <code>:1.12.0-baseline</code>. Heavy pages and extra sessions may need
+          more memory.
           <a :href="`${docsUrl}/deployment/standalone#older-cpus-synology-nas`">same commands, different runtime</a>.
         </p>
 
+        <p class="tag-hint">
+          Dashboard: <code>http://localhost:8191/dashboard</code>. MCP: <code>http://localhost:8191/mcp</code>. Start
+          commands expose the API on localhost; other containers can use <code>http://trawl:8191</code> on the same
+          Docker network.
+        </p>
         <!-- Step 2: Start (only for compose tabs) -->
         <template v-if="active !== 'docker'">
-          <div class="step-label" style="margin-top: 24px;">2 — start</div>
+          <div class="step-label" style="margin-top: 24px;">2 - start</div>
           <div class="cta-snippet">
             <div class="snippet-bar">
               <span class="snippet-lang">terminal</span>
